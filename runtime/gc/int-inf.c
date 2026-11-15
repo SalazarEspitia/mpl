@@ -103,19 +103,99 @@ void fillIntInfArg (GC_state s, objptr arg, __mpz_struct *res,
 }
 
 /*
- * Initialize an __mpz_struct to use the space provided by the heap.
+ * An IntInf primitive is called with `bytes`, an upper bound on the size of
+ * its result, and normally builds the result in place at the frontier: the
+ * limit check before the call made room for it. But `bytes` is known only at
+ * run time and can exceed a block, while a chunk that holds several objects
+ * may only have objects in its first block (see HM_getChunkOf), so GC_collect
+ * does not make room for such a request. When the bound does not fit in the
+ * room left, the result is built in a temporary buffer and then copied: to
+ * the frontier if the actual result fits there after all, and otherwise into
+ * a chunk of its own, like a large sequence.
  */
-void initIntInfRes (GC_state s, __mpz_struct *res,
-                    ARG_USED_FOR_ASSERT size_t bytes) {
+static inline bool resultFitsAtFrontier (GC_state s, size_t bytes) {
+  return bytes <= (size_t)(s->limitPlusSlop - s->frontier);
+}
+
+static pointer resultSpace (GC_state s, size_t bytes) {
+  if (resultFitsAtFrontier (s, bytes))
+    return s->frontier;
+  pointer buffer = malloc (bytes);
+  if (NULL == buffer)
+    DIE ("Out of memory. Unable to allocate %zu bytes for an IntInf result.", bytes);
+  return buffer;
+}
+
+static inline bool isTemporaryResultSpace (GC_state s, pointer space) {
+  return space != s->frontier;
+}
+
+/* Allocate a chunk holding exactly one object of objectSize bytes, in the
+ * heap of the current chunk (where the result would otherwise have gone).
+ * The mutator's current chunk and frontier are unchanged. */
+static pointer allocateResultChunk (GC_state s, size_t objectSize) {
+  GC_thread thread = getThreadCurrent(s);
+  HM_chunk current = thread->currentChunk;
+  assert (NULL != current);
+  HM_HierarchicalHeap hh = HM_getLevelHead(current);
+
+  HM_chunk chunk = HM_allocateChunkWithPurpose(
+    HM_HH_getChunkList(hh), objectSize, BLOCK_FOR_HEAP_CHUNK);
+  chunk->levelHead = HM_HH_getUFNode(hh);
+  chunk->decheckState = current->decheckState;
+  chunk->mightContainMultipleObjects = FALSE;
+  HM_HH_addRecentBytesAllocated(thread, HM_getChunkSize(chunk));
+
+  pointer start = HM_getChunkStart(chunk);
+  HM_updateChunkFrontierInList(
+    HM_HH_getChunkList(hh), chunk, alignFrontier (s, start + objectSize));
+  return start;
+}
+
+/* Put a finished result object of objectSize bytes, built at space, into the
+ * heap, and return where it now starts. */
+static pointer commitResult (GC_state s, pointer space, size_t objectSize,
+                             size_t bytes) {
+  if (not isTemporaryResultSpace (s, space)) {
+    setFrontier (s, space + objectSize, bytes);
+    return space;
+  }
+  pointer dst;
+  pointer end = alignFrontier (s, s->frontier + objectSize);
+  if (end <= s->limitPlusSlop) {
+    dst = s->frontier;
+    memcpy (dst, space, objectSize);
+    setFrontier (s, end, (size_t)(end - dst));
+  } else {
+    dst = allocateResultChunk (s, objectSize);
+    memcpy (dst, space, objectSize);
+  }
+  free (space);
+  return dst;
+}
+
+/* Discard the space of a result that turned out to need no heap object. */
+static inline void discardResultSpace (GC_state s, pointer space) {
+  if (isTemporaryResultSpace (s, space))
+    free (space);
+}
+
+/*
+ * Initialize an __mpz_struct to use the space for the result (see above).
+ */
+void initIntInfRes (GC_state s, __mpz_struct *res, size_t bytes) {
   GC_intInf bp;
   size_t nlimbs;
 
-  assert (bytes <= (size_t)(s->limitPlusSlop - s->frontier));
-  bp = (GC_intInf)s->frontier;
+  bp = (GC_intInf)resultSpace (s, bytes);
   /* We have as much space for the limbs as there is to the end of the
-   * heap.  Divide by (sizeof(mp_limb_t)) to get number of limbs.
+   * heap (or of the temporary buffer).  Divide by (sizeof(mp_limb_t)) to get
+   * number of limbs.
    */
-  nlimbs = ((size_t)(s->limitPlusSlop - (pointer)bp->obj.limbs)) / (sizeof(mp_limb_t));
+  pointer end = isTemporaryResultSpace (s, (pointer)bp)
+                ? (pointer)bp + bytes
+                : s->limitPlusSlop;
+  nlimbs = ((size_t)(end - (pointer)bp->obj.limbs)) / (sizeof(mp_limb_t));
   /* The _mp_alloc field is declared as int.
    * Avoid an overflowing assignment, which could happen with huge
    * heaps.
@@ -158,8 +238,10 @@ objptr finiIntInfRes (GC_state s, __mpz_struct *res, size_t bytes) {
   } else
     bp->obj.isneg = FALSE;
   assert (size >= 0);
-  if (size == 0)
+  if (size == 0) {
+    discardResultSpace (s, (pointer)bp);
     return (objptr)1;
+  }
   if (size <= LIMBS_PER_OBJPTR) {
     if (sizeof(objptr) <= sizeof(mp_limb_t)) {
       objptr ans;
@@ -182,7 +264,10 @@ objptr finiIntInfRes (GC_state s, __mpz_struct *res, size_t bytes) {
       // so the shift doesn't matter.
       if (val < (mp_limb_t)1<<(sizeof(objptr) > sizeof(mp_limb_t) ?
                                0 : CHAR_BIT * OBJPTR_SIZE - 2))
-        return (ans<<1 | 1);
+        {
+          discardResultSpace (s, (pointer)bp);
+          return (ans<<1 | 1);
+        }
     } else {
       objptr ans, val;
       val = (objptr)(bp->obj.limbs[0]);
@@ -207,14 +292,18 @@ objptr finiIntInfRes (GC_state s, __mpz_struct *res, size_t bytes) {
          * We only fit if val in [0, 2^(CHAR_BIT * OBJPTR_SIZE - 2) - 1].
          */
         ans = val;
-      if (val < (objptr)1<<(CHAR_BIT * OBJPTR_SIZE - 2))
+      if (val < (objptr)1<<(CHAR_BIT * OBJPTR_SIZE - 2)) {
+        discardResultSpace (s, (pointer)bp);
         return (ans<<1 | 1);
+      }
     }
   }
-  setFrontier (s, (pointer)(&bp->obj.limbs[size]), bytes);
   bp->counter = (GC_sequenceCounter)0;
   bp->length = (GC_sequenceLength)(size + 1); /* +1 for isneg field */
   bp->header = GC_INTINF_HEADER;
+  bp = (GC_intInf)commitResult (s, (pointer)bp,
+                                (size_t)((pointer)(&bp->obj.limbs[size]) - (pointer)bp),
+                                bytes);
   // bp->fwdptr = BOGUS_OBJPTR;
   return pointerToObjptr ((pointer)&bp->obj, NULL);
 }
@@ -308,17 +397,18 @@ objptr IntInf_strop (GC_state s, objptr arg, Int32_t base, size_t bytes,
              arg, base, (uintmax_t)bytes);
   assert (base == 2 || base == 8 || base == 10 || base == 16);
   fillIntInfArg (s, arg, &argmpz, argspace);
-  assert (bytes <= (size_t)(s->limitPlusSlop - s->frontier));
-  sp = (GC_string8)s->frontier;
+  sp = (GC_string8)resultSpace (s, bytes);
   str = strop ((void*)&sp->obj, -base, &argmpz);
   assert (str == (char*)&sp->obj);
   size = strlen(str);
   if (sp->obj.chars[0] == '-')
     sp->obj.chars[0] = '~';
-  setFrontier (s, (pointer)&sp->obj + size, bytes);
   sp->counter = (GC_sequenceCounter)0;
   sp->length = (GC_sequenceLength)size;
   sp->header = GC_STRING8_HEADER;
+  sp = (GC_string8)commitResult (s, (pointer)sp,
+                                 (size_t)(((pointer)&sp->obj + size) - (pointer)sp),
+                                 bytes);
   // sp->fwdptr = BOGUS_OBJPTR;
   return pointerToObjptr ((pointer)&sp->obj, NULL);
 }
