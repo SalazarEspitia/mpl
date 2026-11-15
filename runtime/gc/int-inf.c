@@ -140,9 +140,14 @@ static pointer allocateResultChunk (GC_state s, size_t objectSize) {
   HM_HierarchicalHeap hh = HM_getLevelHead(current);
 
   HM_chunk chunk = HM_allocateChunkWithPurpose(
-    HM_HH_getChunkList(hh), objectSize, BLOCK_FOR_HEAP_CHUNK);
+    HM_HH_getChunkList(hh), align(objectSize, s->alignment),
+    BLOCK_FOR_HEAP_CHUNK);
   chunk->levelHead = HM_HH_getUFNode(hh);
-  chunk->decheckState = current->decheckState;
+#ifdef DETECT_ENTANGLEMENT
+  chunk->decheckState = thread->decheckState;
+#else
+  chunk->decheckState = DECHECK_BOGUS_TID;
+#endif
   chunk->mightContainMultipleObjects = FALSE;
   HM_HH_addRecentBytesAllocated(thread, HM_getChunkSize(chunk));
 
