@@ -174,6 +174,14 @@ fun transform (program as Program.T {datatypes, globals, functions, main}) =
             in
                derefPrim args
             end
+            (* Array_copyArray (dst, di, src, si, len) and Array_copyVector
+             * (the same, with src a vector) store values of src's contents
+             * type into dst. *)
+            fun copyPrim args = let
+               val _ = TypeInfo.coerce (Vector.sub (args, 2), Vector.sub (args, 0))
+            in
+               TypeInfo.fromType Type.unit
+            end
             fun equalPrim args =
                let
                   val _ = TypeInfo.coerce (Vector.sub (args, 0), Vector.sub (args, 1))
@@ -197,6 +205,8 @@ fun transform (program as Program.T {datatypes, globals, functions, main}) =
                      (ty, TypeInfo.Array)
                   end
                | Prim.Array_cas _ => casPrim (TypeInfo.Array, 2) args
+               | Prim.Array_copyArray => copyPrim args
+               | Prim.Array_copyVector => copyPrim args
                | Prim.Array_sub _ => derefPrim args
                | Prim.Array_toArray => Vector.sub (args, 0)
                | Prim.Array_toVector => Vector.sub (args, 0)
