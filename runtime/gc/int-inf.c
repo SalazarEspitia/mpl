@@ -146,9 +146,13 @@ static pointer allocateResultChunk (GC_state s, size_t objectSize) {
   chunk->mightContainMultipleObjects = FALSE;
   HM_HH_addRecentBytesAllocated(thread, HM_getChunkSize(chunk));
 
+  /* Set the chunk's frontier through HM_HH_updateValues, as
+   * allocateLargeSequence does, so the allocation is recorded like any
+   * other. */
   pointer start = HM_getChunkStart(chunk);
-  HM_updateChunkFrontierInList(
-    HM_HH_getChunkList(hh), chunk, alignFrontier (s, start + objectSize));
+  thread->currentChunk = chunk;
+  HM_HH_updateValues(thread, alignFrontier (s, start + objectSize));
+  thread->currentChunk = current;
   return start;
 }
 
