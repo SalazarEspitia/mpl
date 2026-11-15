@@ -180,6 +180,12 @@ fun transform (program as Program.T {datatypes, globals, functions, main}) =
                in
                   primBoolInfo
                end
+            fun copyPrim args =
+               let
+                  val _ = TypeInfo.coerce (Vector.sub (args, 2), Vector.sub (args, 0))
+               in
+                  TypeInfo.fromType Type.unit
+               end
             fun default () =
               if case Type.dest resultType of
                       Type.Datatype tycon => Tycon.equals (tycon, primBoolTycon)
@@ -197,6 +203,8 @@ fun transform (program as Program.T {datatypes, globals, functions, main}) =
                      (ty, TypeInfo.Array)
                   end
                | Prim.Array_cas _ => casPrim (TypeInfo.Array, 2) args
+               | Prim.Array_copyArray => copyPrim args
+               | Prim.Array_copyVector => copyPrim args
                | Prim.Array_sub _ => derefPrim args
                | Prim.Array_toArray => Vector.sub (args, 0)
                | Prim.Array_toVector => Vector.sub (args, 0)
