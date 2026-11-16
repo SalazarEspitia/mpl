@@ -165,6 +165,9 @@ static void freeResultChunk (GC_state s, pointer space) {
   HM_freeChunkWithInfo(s, chunk, NULL, BLOCK_FOR_HEAP_CHUNK);
 }
 
+/* When the room left covers the bound but not the spare limb, even a small
+ * result gets a chunk of its own; commitResult then copies it to the
+ * frontier and frees the chunk. That is rare, and only costs the chunk. */
 static pointer resultSpace (GC_state s, size_t bytes) {
   if (resultFitsAtFrontier (s, bytes))
     return s->frontier;
