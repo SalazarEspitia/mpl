@@ -113,14 +113,22 @@ void fillIntInfArg (GC_state s, objptr arg, __mpz_struct *res,
  * the frontier if the actual result fits there after all, and otherwise into
  * a chunk of its own, like a large sequence.
  */
+/* GMP can need one limb more than the basis reserves: mpz_com of a
+ * non-negative number, mpz_and/mpz_ior of two negative ones and mpz_xor of
+ * operands with different signs ask for one more limb than the largest
+ * operand, and would otherwise reallocate _mp_d, which points into the heap
+ * or into the middle of the temporary buffer. So both kinds of space have
+ * room for one spare limb. */
+#define RESULT_SPARE_BYTES (sizeof(mp_limb_t))
+
 static inline bool resultFitsAtFrontier (GC_state s, size_t bytes) {
-  return bytes <= (size_t)(s->limitPlusSlop - s->frontier);
+  return bytes + RESULT_SPARE_BYTES <= (size_t)(s->limitPlusSlop - s->frontier);
 }
 
 static pointer resultSpace (GC_state s, size_t bytes) {
   if (resultFitsAtFrontier (s, bytes))
     return s->frontier;
-  pointer buffer = malloc (bytes);
+  pointer buffer = malloc (bytes + RESULT_SPARE_BYTES);
   if (NULL == buffer)
     DIE ("Out of memory. Unable to allocate %zu bytes for an IntInf result.", bytes);
   return buffer;
@@ -166,7 +174,7 @@ static pointer allocateResultChunk (GC_state s, size_t objectSize) {
 static pointer commitResult (GC_state s, pointer space, size_t objectSize,
                              size_t bytes) {
   if (not isTemporaryResultSpace (s, space)) {
-    setFrontier (s, space + objectSize, bytes);
+    setFrontier (s, space + objectSize, bytes + RESULT_SPARE_BYTES);
     return space;
   }
   pointer dst;
@@ -202,7 +210,7 @@ void initIntInfRes (GC_state s, __mpz_struct *res, size_t bytes) {
    * number of limbs.
    */
   pointer end = isTemporaryResultSpace (s, (pointer)bp)
-                ? (pointer)bp + bytes
+                ? (pointer)bp + bytes + RESULT_SPARE_BYTES
                 : s->limitPlusSlop;
   nlimbs = ((size_t)(end - (pointer)bp->obj.limbs)) / (sizeof(mp_limb_t));
   /* The _mp_alloc field is declared as int.
