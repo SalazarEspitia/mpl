@@ -131,7 +131,16 @@ void GC_collect (GC_state s, size_t bytesRequested, bool force) {
    */
   bytesRequested += GC_HEAP_LIMIT_SLOP;
 
-  assert(bytesRequested + sizeof(struct HM_chunk) <= s->controls->blockSize);
+  /* A limit check for an IntInf primitive requests the primitive's
+   * worst-case result size, which is known only at run time and can exceed
+   * a block. Don't extend into a larger chunk for it: a chunk holding several
+   * objects may only have objects in its first block (see HM_getChunkOf).
+   * The call's own block allocates nothing, and the code after it makes its
+   * own limit check (insert-checks.fun), so the request covers only the
+   * result, which the primitive builds elsewhere when it doesn't fit (see
+   * int-inf.c). Guarantee at most the largest statically sized request. */
+  if (bytesRequested + sizeof(struct HM_chunk) > s->controls->blockSize)
+    bytesRequested = GC_MAX_STATIC_BYTES_REQUESTED;
 
   getThreadCurrent(s)->bytesNeeded = bytesRequested;
   switchToSignalHandlerThreadIfNonAtomicAndSignalPending(s);

@@ -772,6 +772,7 @@ fun limitCheckCoalesce (f: Function.t, maxAlloc, tyconTy) =
        *   E = set of entry nodes
        *     = start, Cont, Handler,
        *         or CReturn that doesn't ensure bytesFree
+       *         or CReturn from a cfunction with bytesNeeded
        *         Jump that calls a cfunction with bytesneeded
        *   D = set of decycling nodes
        *)
@@ -796,8 +797,14 @@ fun limitCheckCoalesce (f: Function.t, maxAlloc, tyconTy) =
                 case kind of
                    Cont _ => true
                  | CReturn {func, ...} =>
-                      CFunction.mayGC func
-                      andalso not (Option.isSome (CFunction.ensuresBytesFree func))
+                      (CFunction.mayGC func
+                       andalso not (Option.isSome (CFunction.ensuresBytesFree func)))
+                      (* A cfunction with bytesNeeded (the IntInf primitives)
+                       * builds its result at the frontier, and the runtime
+                       * may give it only what it asked for. Check again after
+                       * it returns, rather than folding the allocation that
+                       * follows into the check before the call. *)
+                      orelse Option.isSome (CFunction.bytesNeeded func)
                  | Handler => true
                  | Jump => jump ()
                  | SporkSpwn _ => true

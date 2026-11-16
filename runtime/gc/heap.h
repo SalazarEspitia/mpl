@@ -10,6 +10,10 @@
 #if (defined (MLTON_GC_INTERNAL_TYPES))
 
 #define GC_HEAP_LIMIT_SLOP 512
+/* The largest request a statically sized limit check makes, slop included:
+ * the compiler limits the allocation covered by one check to 512*7 bytes
+ * minus the slop (maxBytesAlloc in mlton/backend/insert-checks.fun). */
+#define GC_MAX_STATIC_BYTES_REQUESTED (512 * 7)
 
 #endif /* (defined (MLTON_GC_INTERNAL_TYPES)) */
 

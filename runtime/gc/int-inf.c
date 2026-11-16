@@ -103,19 +103,134 @@ void fillIntInfArg (GC_state s, objptr arg, __mpz_struct *res,
 }
 
 /*
- * Initialize an __mpz_struct to use the space provided by the heap.
+ * An IntInf primitive is called with `bytes`, an upper bound on the size of
+ * its result, and normally builds the result in place at the frontier: the
+ * limit check before the call made room for it. But `bytes` is known only at
+ * run time and can exceed a block, while a chunk that holds several objects
+ * may only have objects in its first block (see HM_getChunkOf), so GC_collect
+ * does not make room for such a request. When the bound does not fit in the
+ * room left, the result is built directly in a new chunk of its own, like a
+ * large sequence. Afterwards that chunk is kept if the result needs it; a
+ * result that turns out to fit at the frontier after all is copied there, and
+ * the chunk is freed, as it is for a fixnum result.
+ *
+ * GMP can need one limb more than the basis reserves: mpz_com of a
+ * non-negative number, mpz_and/mpz_ior of two negative ones and mpz_xor of
+ * operands with different signs ask for one more limb than the largest
+ * operand, and would otherwise reallocate _mp_d, which points into the heap.
+ * (At the frontier main never needs it: the estimate includes up to 7 bytes
+ * of alignment padding and the room is a multiple of 8, which leaves a whole
+ * spare limb; a space of exactly the estimate does not.) So both kinds of
+ * space have room for one spare limb.
  */
-void initIntInfRes (GC_state s, __mpz_struct *res,
-                    ARG_USED_FOR_ASSERT size_t bytes) {
+#define RESULT_SPARE_BYTES (sizeof(mp_limb_t))
+
+static inline bool resultFitsAtFrontier (GC_state s, size_t bytes) {
+  return bytes + RESULT_SPARE_BYTES <= (size_t)(s->limitPlusSlop - s->frontier);
+}
+
+/* A result built at the frontier starts there; one built in its own chunk
+ * starts anywhere else. */
+static inline bool isOwnChunkResultSpace (GC_state s, pointer space) {
+  return space != s->frontier;
+}
+
+/* A new chunk for one result of at most `bytes` (plus the spare limb), in the
+ * heap of the current chunk, where the result would otherwise have gone. The
+ * mutator's current chunk and frontier are unchanged. */
+static pointer newResultChunk (GC_state s, size_t bytes) {
+  GC_thread thread = getThreadCurrent(s);
+  HM_chunk current = thread->currentChunk;
+  assert (NULL != current);
+  HM_HierarchicalHeap hh = HM_getLevelHead(current);
+
+  HM_chunk chunk = HM_allocateChunkWithPurpose(
+    HM_HH_getChunkList(hh), align(bytes + RESULT_SPARE_BYTES, s->alignment),
+    BLOCK_FOR_HEAP_CHUNK);
+  chunk->levelHead = HM_HH_getUFNode(hh);
+#ifdef DETECT_ENTANGLEMENT
+  chunk->decheckState = thread->decheckState;
+#else
+  chunk->decheckState = DECHECK_BOGUS_TID;
+#endif
+  chunk->mightContainMultipleObjects = FALSE;
+  return HM_getChunkStart(chunk);
+}
+
+/* Free a result chunk that turned out not to be needed. */
+static void freeResultChunk (GC_state s, pointer space) {
+  HM_chunk chunk = HM_getChunkOf(space);
+  HM_HierarchicalHeap hh = HM_getLevelHead(getThreadCurrent(s)->currentChunk);
+  HM_unlinkChunk(HM_HH_getChunkList(hh), chunk);
+  HM_freeChunkWithInfo(s, chunk, NULL, BLOCK_FOR_HEAP_CHUNK);
+}
+
+/* When the room left covers the bound but not the spare limb, even a small
+ * result gets a chunk of its own; commitResult then copies it to the
+ * frontier and frees the chunk. That is rare, and only costs the chunk. */
+static pointer resultSpace (GC_state s, size_t bytes) {
+  if (resultFitsAtFrontier (s, bytes))
+    return s->frontier;
+  return newResultChunk (s, bytes);
+}
+
+/* The end of the space the result can use. */
+static inline pointer resultSpaceEnd (GC_state s, pointer space) {
+  return isOwnChunkResultSpace (s, space)
+         ? HM_getChunkLimit (HM_getChunkOf (space))
+         : s->limitPlusSlop;
+}
+
+/* Put a finished result object of objectSize bytes, built at space, into the
+ * heap, and return where it now starts. */
+static pointer commitResult (GC_state s, pointer space, size_t objectSize,
+                             size_t bytes) {
+  if (not isOwnChunkResultSpace (s, space)) {
+    setFrontier (s, space + objectSize, bytes + RESULT_SPARE_BYTES);
+    return space;
+  }
+  pointer end = alignFrontier (s, s->frontier + objectSize);
+  if (end <= s->limitPlusSlop) {
+    /* It fits at the frontier after all (the bound is a worst case). */
+    pointer dst = s->frontier;
+    memcpy (dst, space, objectSize);
+    setFrontier (s, end, (size_t)(end - dst));
+    freeResultChunk (s, space);
+    return dst;
+  }
+  /* Keep the chunk. Set its frontier through HM_HH_updateValues, as
+   * allocateLargeSequence does, so the allocation is recorded like any
+   * other. */
+  GC_thread thread = getThreadCurrent(s);
+  HM_chunk current = thread->currentChunk;
+  HM_chunk chunk = HM_getChunkOf(space);
+  HM_HH_addRecentBytesAllocated(thread, HM_getChunkSize(chunk));
+  thread->currentChunk = chunk;
+  HM_HH_updateValues(thread, alignFrontier (s, space + objectSize));
+  thread->currentChunk = current;
+  return space;
+}
+
+/* Discard the space of a result that turned out to need no heap object. */
+static inline void discardResultSpace (GC_state s, pointer space) {
+  if (isOwnChunkResultSpace (s, space))
+    freeResultChunk (s, space);
+}
+
+/*
+ * Initialize an __mpz_struct to use the space for the result (see above).
+ */
+void initIntInfRes (GC_state s, __mpz_struct *res, size_t bytes) {
   GC_intInf bp;
   size_t nlimbs;
 
-  assert (bytes <= (size_t)(s->limitPlusSlop - s->frontier));
-  bp = (GC_intInf)s->frontier;
+  bp = (GC_intInf)resultSpace (s, bytes);
   /* We have as much space for the limbs as there is to the end of the
-   * heap.  Divide by (sizeof(mp_limb_t)) to get number of limbs.
+   * heap (or of the result's own chunk).  Divide by (sizeof(mp_limb_t)) to
+   * get number of limbs.
    */
-  nlimbs = ((size_t)(s->limitPlusSlop - (pointer)bp->obj.limbs)) / (sizeof(mp_limb_t));
+  pointer end = resultSpaceEnd (s, (pointer)bp);
+  nlimbs = ((size_t)(end - (pointer)bp->obj.limbs)) / (sizeof(mp_limb_t));
   /* The _mp_alloc field is declared as int.
    * Avoid an overflowing assignment, which could happen with huge
    * heaps.
@@ -158,8 +273,10 @@ objptr finiIntInfRes (GC_state s, __mpz_struct *res, size_t bytes) {
   } else
     bp->obj.isneg = FALSE;
   assert (size >= 0);
-  if (size == 0)
+  if (size == 0) {
+    discardResultSpace (s, (pointer)bp);
     return (objptr)1;
+  }
   if (size <= LIMBS_PER_OBJPTR) {
     if (sizeof(objptr) <= sizeof(mp_limb_t)) {
       objptr ans;
@@ -182,7 +299,10 @@ objptr finiIntInfRes (GC_state s, __mpz_struct *res, size_t bytes) {
       // so the shift doesn't matter.
       if (val < (mp_limb_t)1<<(sizeof(objptr) > sizeof(mp_limb_t) ?
                                0 : CHAR_BIT * OBJPTR_SIZE - 2))
-        return (ans<<1 | 1);
+        {
+          discardResultSpace (s, (pointer)bp);
+          return (ans<<1 | 1);
+        }
     } else {
       objptr ans, val;
       val = (objptr)(bp->obj.limbs[0]);
@@ -207,14 +327,18 @@ objptr finiIntInfRes (GC_state s, __mpz_struct *res, size_t bytes) {
          * We only fit if val in [0, 2^(CHAR_BIT * OBJPTR_SIZE - 2) - 1].
          */
         ans = val;
-      if (val < (objptr)1<<(CHAR_BIT * OBJPTR_SIZE - 2))
+      if (val < (objptr)1<<(CHAR_BIT * OBJPTR_SIZE - 2)) {
+        discardResultSpace (s, (pointer)bp);
         return (ans<<1 | 1);
+      }
     }
   }
-  setFrontier (s, (pointer)(&bp->obj.limbs[size]), bytes);
   bp->counter = (GC_sequenceCounter)0;
   bp->length = (GC_sequenceLength)(size + 1); /* +1 for isneg field */
   bp->header = GC_INTINF_HEADER;
+  bp = (GC_intInf)commitResult (s, (pointer)bp,
+                                (size_t)((pointer)(&bp->obj.limbs[size]) - (pointer)bp),
+                                bytes);
   // bp->fwdptr = BOGUS_OBJPTR;
   return pointerToObjptr ((pointer)&bp->obj, NULL);
 }
@@ -308,17 +432,18 @@ objptr IntInf_strop (GC_state s, objptr arg, Int32_t base, size_t bytes,
              arg, base, (uintmax_t)bytes);
   assert (base == 2 || base == 8 || base == 10 || base == 16);
   fillIntInfArg (s, arg, &argmpz, argspace);
-  assert (bytes <= (size_t)(s->limitPlusSlop - s->frontier));
-  sp = (GC_string8)s->frontier;
+  sp = (GC_string8)resultSpace (s, bytes);
   str = strop ((void*)&sp->obj, -base, &argmpz);
   assert (str == (char*)&sp->obj);
   size = strlen(str);
   if (sp->obj.chars[0] == '-')
     sp->obj.chars[0] = '~';
-  setFrontier (s, (pointer)&sp->obj + size, bytes);
   sp->counter = (GC_sequenceCounter)0;
   sp->length = (GC_sequenceLength)size;
   sp->header = GC_STRING8_HEADER;
+  sp = (GC_string8)commitResult (s, (pointer)sp,
+                                 (size_t)(((pointer)&sp->obj + size) - (pointer)sp),
+                                 bytes);
   // sp->fwdptr = BOGUS_OBJPTR;
   return pointerToObjptr ((pointer)&sp->obj, NULL);
 }
