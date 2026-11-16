@@ -109,46 +109,43 @@ void fillIntInfArg (GC_state s, objptr arg, __mpz_struct *res,
  * run time and can exceed a block, while a chunk that holds several objects
  * may only have objects in its first block (see HM_getChunkOf), so GC_collect
  * does not make room for such a request. When the bound does not fit in the
- * room left, the result is built in a temporary buffer and then copied: to
- * the frontier if the actual result fits there after all, and otherwise into
- * a chunk of its own, like a large sequence.
- */
-/* GMP can need one limb more than the basis reserves: mpz_com of a
+ * room left, the result is built directly in a new chunk of its own, like a
+ * large sequence. Afterwards that chunk is kept if the result needs it; a
+ * result that turns out to fit at the frontier after all is copied there, and
+ * the chunk is freed, as it is for a fixnum result.
+ *
+ * GMP can need one limb more than the basis reserves: mpz_com of a
  * non-negative number, mpz_and/mpz_ior of two negative ones and mpz_xor of
  * operands with different signs ask for one more limb than the largest
- * operand, and would otherwise reallocate _mp_d, which points into the heap
- * or into the middle of the temporary buffer. So both kinds of space have
- * room for one spare limb. */
+ * operand, and would otherwise reallocate _mp_d, which points into the heap.
+ * (At the frontier main never needs it: the estimate includes up to 7 bytes
+ * of alignment padding and the room is a multiple of 8, which leaves a whole
+ * spare limb; a space of exactly the estimate does not.) So both kinds of
+ * space have room for one spare limb.
+ */
 #define RESULT_SPARE_BYTES (sizeof(mp_limb_t))
 
 static inline bool resultFitsAtFrontier (GC_state s, size_t bytes) {
   return bytes + RESULT_SPARE_BYTES <= (size_t)(s->limitPlusSlop - s->frontier);
 }
 
-static pointer resultSpace (GC_state s, size_t bytes) {
-  if (resultFitsAtFrontier (s, bytes))
-    return s->frontier;
-  pointer buffer = malloc (bytes + RESULT_SPARE_BYTES);
-  if (NULL == buffer)
-    DIE ("Out of memory. Unable to allocate %zu bytes for an IntInf result.", bytes);
-  return buffer;
-}
-
-static inline bool isTemporaryResultSpace (GC_state s, pointer space) {
+/* A result built at the frontier starts there; one built in its own chunk
+ * starts anywhere else. */
+static inline bool isOwnChunkResultSpace (GC_state s, pointer space) {
   return space != s->frontier;
 }
 
-/* Allocate a chunk holding exactly one object of objectSize bytes, in the
- * heap of the current chunk (where the result would otherwise have gone).
- * The mutator's current chunk and frontier are unchanged. */
-static pointer allocateResultChunk (GC_state s, size_t objectSize) {
+/* A new chunk for one result of at most `bytes` (plus the spare limb), in the
+ * heap of the current chunk, where the result would otherwise have gone. The
+ * mutator's current chunk and frontier are unchanged. */
+static pointer newResultChunk (GC_state s, size_t bytes) {
   GC_thread thread = getThreadCurrent(s);
   HM_chunk current = thread->currentChunk;
   assert (NULL != current);
   HM_HierarchicalHeap hh = HM_getLevelHead(current);
 
   HM_chunk chunk = HM_allocateChunkWithPurpose(
-    HM_HH_getChunkList(hh), align(objectSize, s->alignment),
+    HM_HH_getChunkList(hh), align(bytes + RESULT_SPARE_BYTES, s->alignment),
     BLOCK_FOR_HEAP_CHUNK);
   chunk->levelHead = HM_HH_getUFNode(hh);
 #ifdef DETECT_ENTANGLEMENT
@@ -157,44 +154,64 @@ static pointer allocateResultChunk (GC_state s, size_t objectSize) {
   chunk->decheckState = DECHECK_BOGUS_TID;
 #endif
   chunk->mightContainMultipleObjects = FALSE;
-  HM_HH_addRecentBytesAllocated(thread, HM_getChunkSize(chunk));
+  return HM_getChunkStart(chunk);
+}
 
-  /* Set the chunk's frontier through HM_HH_updateValues, as
-   * allocateLargeSequence does, so the allocation is recorded like any
-   * other. */
-  pointer start = HM_getChunkStart(chunk);
-  thread->currentChunk = chunk;
-  HM_HH_updateValues(thread, alignFrontier (s, start + objectSize));
-  thread->currentChunk = current;
-  return start;
+/* Free a result chunk that turned out not to be needed. */
+static void freeResultChunk (GC_state s, pointer space) {
+  HM_chunk chunk = HM_getChunkOf(space);
+  HM_HierarchicalHeap hh = HM_getLevelHead(getThreadCurrent(s)->currentChunk);
+  HM_unlinkChunk(HM_HH_getChunkList(hh), chunk);
+  HM_freeChunkWithInfo(s, chunk, NULL, BLOCK_FOR_HEAP_CHUNK);
+}
+
+static pointer resultSpace (GC_state s, size_t bytes) {
+  if (resultFitsAtFrontier (s, bytes))
+    return s->frontier;
+  return newResultChunk (s, bytes);
+}
+
+/* The end of the space the result can use. */
+static inline pointer resultSpaceEnd (GC_state s, pointer space) {
+  return isOwnChunkResultSpace (s, space)
+         ? HM_getChunkLimit (HM_getChunkOf (space))
+         : s->limitPlusSlop;
 }
 
 /* Put a finished result object of objectSize bytes, built at space, into the
  * heap, and return where it now starts. */
 static pointer commitResult (GC_state s, pointer space, size_t objectSize,
                              size_t bytes) {
-  if (not isTemporaryResultSpace (s, space)) {
+  if (not isOwnChunkResultSpace (s, space)) {
     setFrontier (s, space + objectSize, bytes + RESULT_SPARE_BYTES);
     return space;
   }
-  pointer dst;
   pointer end = alignFrontier (s, s->frontier + objectSize);
   if (end <= s->limitPlusSlop) {
-    dst = s->frontier;
+    /* It fits at the frontier after all (the bound is a worst case). */
+    pointer dst = s->frontier;
     memcpy (dst, space, objectSize);
     setFrontier (s, end, (size_t)(end - dst));
-  } else {
-    dst = allocateResultChunk (s, objectSize);
-    memcpy (dst, space, objectSize);
+    freeResultChunk (s, space);
+    return dst;
   }
-  free (space);
-  return dst;
+  /* Keep the chunk. Set its frontier through HM_HH_updateValues, as
+   * allocateLargeSequence does, so the allocation is recorded like any
+   * other. */
+  GC_thread thread = getThreadCurrent(s);
+  HM_chunk current = thread->currentChunk;
+  HM_chunk chunk = HM_getChunkOf(space);
+  HM_HH_addRecentBytesAllocated(thread, HM_getChunkSize(chunk));
+  thread->currentChunk = chunk;
+  HM_HH_updateValues(thread, alignFrontier (s, space + objectSize));
+  thread->currentChunk = current;
+  return space;
 }
 
 /* Discard the space of a result that turned out to need no heap object. */
 static inline void discardResultSpace (GC_state s, pointer space) {
-  if (isTemporaryResultSpace (s, space))
-    free (space);
+  if (isOwnChunkResultSpace (s, space))
+    freeResultChunk (s, space);
 }
 
 /*
@@ -206,12 +223,10 @@ void initIntInfRes (GC_state s, __mpz_struct *res, size_t bytes) {
 
   bp = (GC_intInf)resultSpace (s, bytes);
   /* We have as much space for the limbs as there is to the end of the
-   * heap (or of the temporary buffer).  Divide by (sizeof(mp_limb_t)) to get
-   * number of limbs.
+   * heap (or of the result's own chunk).  Divide by (sizeof(mp_limb_t)) to
+   * get number of limbs.
    */
-  pointer end = isTemporaryResultSpace (s, (pointer)bp)
-                ? (pointer)bp + bytes + RESULT_SPARE_BYTES
-                : s->limitPlusSlop;
+  pointer end = resultSpaceEnd (s, (pointer)bp);
   nlimbs = ((size_t)(end - (pointer)bp->obj.limbs)) / (sizeof(mp_limb_t));
   /* The _mp_alloc field is declared as int.
    * Avoid an overflowing assignment, which could happen with huge
