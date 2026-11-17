@@ -813,10 +813,12 @@ fun limitCheckCoalesce (f: Function.t, maxAlloc, tyconTy) =
                       (CFunction.mayGC func
                        andalso not (Option.isSome (CFunction.ensuresBytesFree func)))
                       (* A cfunction with bytesNeeded (the IntInf primitives)
-                       * builds its result at the frontier, and the runtime
-                       * may give it only what it asked for. Check again after
-                       * it returns, rather than folding the allocation that
-                       * follows into the check before the call. *)
+                       * builds its result at the frontier or in a chunk of
+                       * its own, and the collection before it may make less
+                       * room than it asked for (GC_collectIntInf). Check
+                       * again after it returns, rather than folding the
+                       * allocation that follows into the check before the
+                       * call. *)
                       orelse Option.isSome (CFunction.bytesNeeded func)
                  | Handler => true
                  | Jump => jump ()

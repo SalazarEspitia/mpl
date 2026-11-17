@@ -107,21 +107,23 @@ void fillIntInfArg (GC_state s, objptr arg, __mpz_struct *res,
  * its result, and normally builds the result in place at the frontier: the
  * limit check before the call made room for it. But `bytes` is known only at
  * run time and can exceed a block, while a chunk that holds several objects
- * may only have objects in its first block (see HM_getChunkOf), so GC_collect
- * does not make room for such a request. When the bound does not fit in the
+ * may only have objects in its first block (see HM_getChunkOf), so the limit
+ * check before the call collects with GC_collectIntInf, which doesn't make
+ * room for such a request (garbage-collection.c). When the bound does not
+ * fit in the
  * room left, the result is built directly in a new chunk of its own, like a
  * large sequence. Afterwards that chunk is kept if the result needs it; a
  * result that turns out to fit at the frontier after all is copied there, and
  * the chunk is freed, as it is for a fixnum result.
  *
- * GMP can need one limb more than the basis reserves: mpz_com of a
- * non-negative number, mpz_and/mpz_ior of two negative ones and mpz_xor of
- * operands with different signs ask for one more limb than the largest
- * operand, and would otherwise reallocate _mp_d, which points into the heap.
- * (At the frontier main never needs it: the estimate includes up to 7 bytes
- * of alignment padding and the room is a multiple of 8, which leaves a whole
- * spare limb; a space of exactly the estimate does not.) So both kinds of
- * space have room for one spare limb.
+ * GMP's mpz_com of a non-negative number, mpz_and/mpz_ior of two negative
+ * ones and mpz_xor of operands with different signs ask for one more limb
+ * than the largest operand; GMP would otherwise reallocate _mp_d, which points
+ * into the heap. The basis reserves that limb for notb, andb, orb and xorb.
+ * Both kinds of space keep one spare limb on top of the reserve, as main
+ * effectively does at the frontier (the reserve includes up to 7 bytes of
+ * alignment padding and the room left is a multiple of 8): a space of exactly
+ * the reserve would leave no margin for a primitive whose bound is exact.
  */
 #define RESULT_SPARE_BYTES (sizeof(mp_limb_t))
 
