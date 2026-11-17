@@ -200,14 +200,18 @@ static pointer commitResult (GC_state s, pointer space, size_t objectSize,
   }
   /* Keep the chunk. Set its frontier through HM_HH_updateValues, as
    * allocateLargeSequence does, so the allocation is recorded like any
-   * other. */
+   * other (HM_HH_updateValues works on the thread's current chunk, hence the
+   * swap). Count it for allocation profiling too, as setFrontier does for a
+   * result at the frontier. */
   GC_thread thread = getThreadCurrent(s);
   HM_chunk current = thread->currentChunk;
   HM_chunk chunk = HM_getChunkOf(space);
+  pointer resultEnd = alignFrontier (s, space + objectSize);
   HM_HH_addRecentBytesAllocated(thread, HM_getChunkSize(chunk));
   thread->currentChunk = chunk;
-  HM_HH_updateValues(thread, alignFrontier (s, space + objectSize));
+  HM_HH_updateValues(thread, resultEnd);
   thread->currentChunk = current;
+  GC_profileAllocInc (s, (size_t)(resultEnd - space));
   return space;
 }
 
