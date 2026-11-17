@@ -131,16 +131,7 @@ void GC_collect (GC_state s, size_t bytesRequested, bool force) {
    */
   bytesRequested += GC_HEAP_LIMIT_SLOP;
 
-  /* A limit check for an IntInf primitive requests the primitive's
-   * worst-case result size, which is known only at run time and can exceed
-   * a block. Don't extend into a larger chunk for it: a chunk holding several
-   * objects may only have objects in its first block (see HM_getChunkOf).
-   * The call's own block allocates nothing, and the code after it makes its
-   * own limit check (insert-checks.fun), so the request covers only the
-   * result, which the primitive builds elsewhere when it doesn't fit (see
-   * int-inf.c). Guarantee at most the largest statically sized request. */
-  if (bytesRequested + sizeof(struct HM_chunk) > s->controls->blockSize)
-    bytesRequested = GC_MAX_STATIC_BYTES_REQUESTED;
+  assert(bytesRequested + sizeof(struct HM_chunk) <= s->controls->blockSize);
 
   getThreadCurrent(s)->bytesNeeded = bytesRequested;
   switchToSignalHandlerThreadIfNonAtomicAndSignalPending(s);
@@ -162,4 +153,21 @@ void GC_collect (GC_state s, size_t bytesRequested, bool force) {
     FALSE);
 
   leave(s);
+}
+
+/* The limit check before an IntInf primitive (insert-checks.fun) requests the
+ * primitive's worst-case result size, which is known only at run time and can
+ * exceed a block. GC_collect would then extend the thread into a chunk of
+ * several blocks, and the objects allocated after the result would be past
+ * the chunk's first block, so HM_getChunkOf couldn't find their chunk. So a
+ * request that doesn't fit in a block is reduced to the largest statically
+ * sized request: the primitive builds a result that doesn't fit in the room
+ * left in a chunk of its own (int-inf.c), and the code after the call makes its
+ * own limit check. Unlike GC_collect, this doesn't guarantee the amount asked
+ * for, which is why the compiler declares no ensuresBytesFree for it. */
+void GC_collectIntInf (GC_state s, size_t bytesRequested, bool force) {
+  if (bytesRequested + GC_HEAP_LIMIT_SLOP + sizeof(struct HM_chunk)
+      > s->controls->blockSize)
+    bytesRequested = GC_MAX_STATIC_BYTES_REQUESTED - GC_HEAP_LIMIT_SLOP;
+  GC_collect (s, bytesRequested, force);
 }

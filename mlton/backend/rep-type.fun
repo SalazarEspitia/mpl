@@ -1173,12 +1173,12 @@ structure BuiltInCFunction =
                   return = unit}
 
       local
-         fun make b = fn () =>
+         fun make (target, ensuresBytesFree) b = fn () =>
             T {args = Vector.new3 (Type.gcState (), Type.csize (), Type.bool),
                convention = Cdecl,
                inline = false,
                kind = Kind.Runtime {bytesNeeded = NONE,
-                                    ensuresBytesFree = SOME 1,
+                                    ensuresBytesFree = ensuresBytesFree,
                                     mayGC = true,
                                     maySwitchThreadsFrom = b,
                                     maySwitchThreadsTo = b,
@@ -1188,11 +1188,16 @@ structure BuiltInCFunction =
                prototype = (Vector.new3 (CType.cpointer, CType.csize (), CType.bool), NONE),
                return = Type.unit,
                symbolScope = SymbolScope.Private,
-               target = Direct "GC_collect"}
-         val t = make true
-         val f = make false
+               target = Direct target}
+         val t = make ("GC_collect", SOME 1) true
+         val f = make ("GC_collect", SOME 1) false
+         (* GC_collectIntInf may make less room than its argument (see
+          * garbage-collection.c), so it ensures no bytes free. *)
+         val ti = make ("GC_collectIntInf", NONE) true
+         val fi = make ("GC_collectIntInf", NONE) false
       in
          fun gc {maySwitchThreads = b} = if b then t () else f ()
+         fun gcIntInf {maySwitchThreads = b} = if b then ti () else fi ()
       end
    end
 

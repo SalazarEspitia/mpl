@@ -115,5 +115,6 @@ signature REP_TYPE =
          sig
             val bug: unit -> t CFunction.t
             val gc: {maySwitchThreads: bool} -> t CFunction.t
+            val gcIntInf: {maySwitchThreads: bool} -> t CFunction.t
          end
    end

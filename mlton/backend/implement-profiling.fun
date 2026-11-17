@@ -641,6 +641,7 @@ fun transform program =
                                     in
                                        case target of
                                           Direct "GC_collect" => doit SourceInfo.gc
+                                        | Direct "GC_collectIntInf" => doit SourceInfo.gc
                                         | Direct "GC_sequenceAllocate" =>
                                              doit SourceInfo.gcSequenceAllocate
                                         | Direct "MLton_bug" => add pushes

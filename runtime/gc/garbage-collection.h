@@ -14,6 +14,7 @@
 /* Runtime Interface */
 /*********************/
 PRIVATE void GC_collect(GC_state s, size_t bytesRequested, bool force);
+PRIVATE void GC_collectIntInf(GC_state s, size_t bytesRequested, bool force);
 
 /**********************/
 /* Internal Interface */

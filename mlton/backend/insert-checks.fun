@@ -247,7 +247,9 @@ fun insertFunction (f: Function.t,
                               func = func,
                               return = return})
                  | _ => transfer
-             fun mkCollect (amount: Operand.t (* of type word *)) =
+             (* gcFunc: GC_collect, or GC_collectIntInf for the check before an
+              * IntInf primitive (see bigAllocation) *)
+             fun mkCollect (amount: Operand.t (* of type word *), gcFunc) =
                 let
                    val collect = Label.newNoname ()
                    val collectReturn = Label.newNoname ()
@@ -282,7 +284,7 @@ fun insertFunction (f: Function.t,
                             (doneCollect, Vector.new0 (), Operand.bool false)
                        | Control.Every =>
                             (collect, Vector.new0 (), Operand.bool true)
-                   val func = CFunction.gc {maySwitchThreads = handlesSignals}
+                   val func = gcFunc {maySwitchThreads = handlesSignals}
                    val _ =
                       newBlocks :=
                       Block.T {args = Vector.new0 (),
@@ -446,13 +448,14 @@ fun insertFunction (f: Function.t,
                            stackCheck
                         end
                    else nextCheck
-             fun mkChecks limitCheck =
+             fun mkChecksWith (limitCheck, gcFunc) =
                 let
                    val {collect, dontCollect} =
                       mkCollect (case limitCheck of
                                     Zero => Operand.zero (WordSize.csize())
                                   | Small => Operand.zero (WordSize.csize())
-                                  | Large oper => oper)
+                                  | Large oper => oper,
+                                 gcFunc)
                    val nextCheck = dontCollect
                    val nextCheck =
                       mkSignalCheck (limitCheck,
@@ -468,12 +471,21 @@ fun insertFunction (f: Function.t,
                 in
                    nextCheck
                 end
+             fun mkChecks limitCheck = mkChecksWith (limitCheck, CFunction.gc)
              fun gotoChecks limitCheck =
                 Transfer.Goto {args = Vector.new0 (), dst = mkChecks limitCheck}
+             (* The check before an IntInf primitive, whose bytesNeeded is a
+              * bound on its result known only at run time, collects with
+              * GC_collectIntInf: that reduces a request too large for a block,
+              * since the primitive builds such a result in a chunk of its own
+              * (see garbage-collection.c and int-inf.c). *)
              fun bigAllocation (blockBytesNeeded, transferBytesNeeded) =
                 if WordX.isZero blockBytesNeeded
                    then (Vector.new0 (),
-                         gotoChecks (Large transferBytesNeeded))
+                         Transfer.Goto
+                         {args = Vector.new0 (),
+                          dst = mkChecksWith (Large transferBytesNeeded,
+                                              CFunction.gcIntInf)})
                    else let
                            val bytesNeededVar = Var.newNoname ()
                            val bytesNeededTy = Type.csize ()
@@ -503,7 +515,8 @@ fun insertFunction (f: Function.t,
                             Transfer.ifBoolE
                             (overflowOper,
                              NONE,
-                             {falsee = mkChecks (Large bytesNeededOper),
+                             {falsee = mkChecksWith (Large bytesNeededOper,
+                                                     CFunction.gcIntInf),
                               truee = heapCheckTooLarge ()}))
                         end
              val (statements, transfer) =
