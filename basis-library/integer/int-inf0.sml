@@ -1240,8 +1240,11 @@ structure IntInf =
                   in
                      ans
                   end
+               (* One limb more than the larger operand: the result can carry
+                * into it, e.g. andb of two negative numbers whose magnitudes
+                * are all ones in the low limbs. *)
                else bigOp (lhs, rhs, 
-                           reserve (S.max (numLimbs lhs, numLimbs rhs), 0))
+                           reserve (S.max (numLimbs lhs, numLimbs rhs), 1))
       in
          val bigAndb = make (W.andb, Prim.andb)
          val bigOrb = make (W.orb, Prim.orb)
@@ -1251,7 +1254,9 @@ structure IntInf =
       fun bigNotb (arg: bigInt): bigInt =
          if isSmall arg
             then oneTagCoerce (W.notb (Prim.toWord arg))
-            else Prim.notb (arg, reserve (numLimbs arg, 0))
+            (* notb x = ~x - 1: for x = 2^(64n) - 1 (n limbs of ones) the
+             * result is -2^(64n), which has n + 1 limbs. *)
+            else Prim.notb (arg, reserve (numLimbs arg, 1))
 
       local
          val bitsPerLimb = MPLimb.sizeInBitsWord
