@@ -1450,14 +1450,18 @@ struct
 
   (* Only the original thread gets here. Its depth is 1, but it is still
    * allocating in the current chunk of the depth-0 (root) heap, and would
-   * keep doing so until that chunk fills. Start a fresh depth-1 chunk now,
-   * so that the program's own top-level objects are not allocated at depth
-   * 0: the root heap is never collected, and anything stored into a depth-0
-   * ref or array is pinned, so it would be retained until exit.
+   * keep doing so until something moves it to a depth-1 chunk, for example
+   * that chunk filling up or a large array. Start a fresh
+   * depth-1 chunk now, so that the program's own top-level objects are not
+   * allocated at depth 0: the root heap is never collected, and anything
+   * stored into a depth-0 ref or array is pinned, so it would be retained
+   * until exit.
    *
-   * This is done after the scheduler thread has been created above, so
-   * that this change does not move the objects the scheduler thread starts
-   * out referring to (through its copy of this thread's stack). *)
+   * This is done only after the scheduler thread has been created above,
+   * so the objects allocated before this point, which the scheduler thread
+   * refers to through its copy of this thread's stack, stay where they were
+   * allocated: in the root heap, which is never collected (unless the boot
+   * chunk had already filled up). *)
   val _ = HH.forceLeftHeap (myWorkerId (), originalThread)
 
 
