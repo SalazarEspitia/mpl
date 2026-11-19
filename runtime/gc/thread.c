@@ -131,7 +131,11 @@ void GC_HH_mergeThreads(pointer threadp, pointer childp) {
    * because the stack may contain a pointer into the child's heap (we merge
    * right after reading from the "right branch" result ref).
    */
-  HM_ensureHierarchicalHeapAssurances(s, false, GC_HEAP_LIMIT_SLOP, TRUE);
+  /* Ask for what the thread still needs (as HM_HH_getRoot does): the
+   * function's final check compares the room left with thread->bytesNeeded,
+   * which can still hold an earlier, larger request (upstream #213). */
+  HM_ensureHierarchicalHeapAssurances(
+    s, false, max(GC_HEAP_LIMIT_SLOP, getThreadCurrent(s)->bytesNeeded), TRUE);
 
   /* This should be true, otherwise our call to
    * HM_ensureHierarchicalHeapAssurances() above was on the wrong heap!
@@ -355,7 +359,11 @@ void GC_HH_joinIntoParent(
    * because the stack may contain a pointer into the child's heap (we merge
    * right after reading from the "right branch" result ref).
    */
-  HM_ensureHierarchicalHeapAssurances(s, false, GC_HEAP_LIMIT_SLOP, TRUE);
+  /* Ask for what the thread still needs (as HM_HH_getRoot does): the
+   * function's final check compares the room left with thread->bytesNeeded,
+   * which can still hold an earlier, larger request (upstream #213). */
+  HM_ensureHierarchicalHeapAssurances(
+    s, false, max(GC_HEAP_LIMIT_SLOP, getThreadCurrent(s)->bytesNeeded), TRUE);
 
   /* This should be true, otherwise our call to
    * HM_ensureHierarchicalHeapAssurances() above was on the wrong heap!
