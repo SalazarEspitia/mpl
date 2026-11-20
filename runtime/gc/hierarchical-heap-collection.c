@@ -196,6 +196,29 @@ uint32_t minDepthWithoutCC(GC_thread thread)
   return HM_HH_getDepth(cursor);
 }
 
+/* Collecting the top level (depth 1) copies all of the program's top-level
+ * live data. Do it only once the thread has allocated, since its last local
+ * collection at any depth, collectionThresholdRatio times what the depth-1
+ * heap kept: its used bytes after the last top-level collection
+ * (bytesSurvivedLastTopLevelCollection, set by HM_HHC_collectLocal), or
+ * what the CCs of depth 1 merged into it kept (its CC pack's
+ * bytesSurvivedLastCollection), whichever is larger. Both are 0 in a new
+ * heap, and the heap is new after either kind of collection (a top-level
+ * collection copies into a new heap, a CC splits one off), so in effect
+ * the more recent of the two measurements counts. The pack's value also
+ * decides when a CC of this heap is registered, so a top-level collection
+ * doesn't write it: that would delay the CC. */
+static bool topLevelCollectionDue(GC_state s, GC_thread thread)
+{
+  HM_HierarchicalHeap hh = thread->hierarchicalHeap;
+  if (HM_HH_getDepth(hh) != 1)
+    return FALSE;
+  size_t survived = max(hh->bytesSurvivedLastTopLevelCollection,
+                        HM_HH_getConcurrentPack(hh)->bytesSurvivedLastCollection);
+  return thread->bytesAllocatedSinceLastCollection >=
+         s->controls->hhConfig.collectionThresholdRatio * survived;
+}
+
 void HM_HHC_collectLocal(uint32_t desiredScope)
 {
   GC_state s = pthread_getspecific(gcstate_key);
@@ -253,7 +276,24 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
    */
   uint32_t minNoCC = minDepthWithoutCC(thread);
   uint32_t minOkay = desiredScope;
-  minOkay = max(minOkay, thread->minLocalCollectionDepth);
+  /* min-collection-depth (default 2) keeps a collection from claiming the
+   * shallow levels of the deque, where claiming would block steals. A thread
+   * running at depth 1 (the top level, outside any par) has an empty deque:
+   * collecting its depth-1 heap claims nothing, so it is just a leaf
+   * collection, the same one the scheduler threads already do at depth 1.
+   * Without this, sequential code at the top level, including the
+   * unpromoted/unstolen right branch of a top-level par, is never collected
+   * locally (only a CC registered at depth 1, by a spawn there, collects it).
+   */
+  uint32_t minLocal = thread->minLocalCollectionDepth;
+  bool collectTopLevel = FALSE;
+  if (thread->currentDepth == 1 && minLocal > 1
+      && topLevelCollectionDue(s, thread))
+  {
+    minLocal = 1;
+    collectTopLevel = TRUE;
+  }
+  minOkay = max(minOkay, minLocal);
   minOkay = max(minOkay, minNoCC);
   uint32_t minDepth = originalLocalScope;
   while (minDepth > minOkay && tryClaimLocalScope(s))
@@ -330,7 +370,7 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
   LOG(LM_HH_COLLECTION, LL_INFO,
       "collecting hh %p (L: %u):\n"
       "  LGC id %d:%zu\n"
-      "  thread min-local depth is %u\n"
+      "  min-local depth is        %u\n"
       "  min without CC is         %u\n"
       "  min okay is               %u\n"
       "  desired min is            %u\n"
@@ -341,7 +381,7 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
       thread->currentDepth,
       s->procNumber,
       s->cumulativeStatistics->numHHLocalGCs,
-      thread->minLocalCollectionDepth,
+      minLocal,
       minNoCC,
       minOkay,
       desiredScope,
@@ -927,6 +967,24 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
    */
   thread->bytesSurvivedLastCollection =
       forwardHHObjptrArgs.bytesMoved + forwardHHObjptrArgs.bytesCopied;
+
+  if (collectTopLevel && minDepth == 1) {
+    /* Record the top level's survivors on the depth-1 heap, for
+     * topLevelCollectionDue, and keep them out of the thread's count:
+     * otherwise they would also hold back the cheap collections of deeper
+     * heaps, which don't copy them. Not in the heap's CC pack: a CC of this
+     * heap would then wait until the heap doubled from that size. */
+    HM_HierarchicalHeap top = thread->hierarchicalHeap;
+    while (NULL != top && HM_HH_getDepth(top) > 1)
+      top = top->nextAncestor;
+    size_t topSurvived = 0;
+    if (NULL != top && HM_HH_getDepth(top) == 1) {
+      topSurvived = HM_getChunkListUsedSize(HM_HH_getChunkList(top));
+      top->bytesSurvivedLastTopLevelCollection = topSurvived;
+    }
+    thread->bytesSurvivedLastCollection -=
+      min(thread->bytesSurvivedLastCollection, topSurvived);
+  }
 
   float new_rf = forwardHHObjptrArgs.entangledBytes;
 

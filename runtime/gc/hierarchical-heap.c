@@ -525,6 +525,7 @@ HM_HierarchicalHeap HM_HH_new(GC_state s, uint32_t depth)
   // hh->dependant2 = NULL;
   hh->numDependants = 0;
   hh->heightDependants = 0;
+  hh->bytesSurvivedLastTopLevelCollection = 0;
 
   HM_initChunkList(HM_HH_getChunkList(hh));
   HM_initRemSet(HM_HH_getRemSet(hh));
@@ -756,7 +757,11 @@ void mergeCompletedCCs(GC_state s, HM_HierarchicalHeap hh) {
     assert(HM_HH_getDepth(hh) == HM_HH_getDepth(subhh));
     assert(NULL != subhh->subHeapCompletedCC);
 
-    if (HM_HH_getConcurrentPack(subhh)->ccstate != CC_DONE) {
+    /* Acquire, to pair with the CC's store of CC_DONE: the merge below reads
+     * the chunk list and remset the CC left in subhh, and those reads must
+     * not be satisfied before this one. */
+    if (__atomic_load_n(&(HM_HH_getConcurrentPack(subhh)->ccstate),
+                        __ATOMIC_ACQUIRE) != CC_DONE) {
       // This CC still in progress. Skip.
       cursor = &(subhh->subHeapForCC);
       subhh = *cursor;

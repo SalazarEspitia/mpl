@@ -78,6 +78,13 @@ typedef struct HM_HierarchicalHeap {
   size_t numDependants;
   size_t heightDependants;
 
+  /* Used bytes of this heap after the local collection at the top level
+   * (depth 1) that produced it, for that collection's threshold; 0 in any
+   * other new heap, including the one a CC split leaves the thread on.
+   * Kept apart from the CC's bytesSurvivedLastCollection, which decides
+   * when a CC of this heap is registered. */
+  size_t bytesSurvivedLastTopLevelCollection;
+
 } *HM_HierarchicalHeap;
 
 #define HM_HH_INVALID_DEPTH CHUNK_INVALID_DEPTH
