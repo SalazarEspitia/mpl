@@ -56,8 +56,10 @@ val ssaPassesDefault =
    {name = "localFlatten1", doit = LocalFlatten.transform, execute = true} ::
    {name = "constantPropagation", doit = ConstantPropagation.transform, execute = true} ::
    {name = "duplicateGlobals1", doit = DuplicateGlobals.transform, execute = false} ::
-   (* SAM_NOTE: disabling splitTypes1 because it does not yet support primitive
-    * polymorphic CAS. We should update the pass and then re-enable.
+   (* splitTypes1 is disabled. It was first disabled for lack of support
+    * for primitive polymorphic CAS, which it now has. With it on, programs
+    * that use spork still fail to compile, with "Ssa.TypeCheck.checkSpork"
+    * errors; where that comes from hasn't been established.
     *)
    {name = "splitTypes1", doit = SplitTypes.transform, execute = false} ::
    (* useless should run 
@@ -71,8 +73,10 @@ val ssaPassesDefault =
    {name = "loopUnroll1", doit = LoopUnroll.transform, execute = false} ::
    {name = "removeUnused2", doit = RemoveUnused.transform, execute = true} ::
    {name = "duplicateGlobals2", doit = DuplicateGlobals.transform, execute = true} ::
-   (* SAM_NOTE: disabling splitTypes2 because it does not yet support primitive
-    * polymorphic CAS. We should update the pass and then re-enable.
+   (* splitTypes2 is disabled. It was first disabled for lack of support
+    * for primitive polymorphic CAS, which it now has. With it on, programs
+    * that use spork still fail to compile, with "Rssa.typeCheck" errors;
+    * where that comes from hasn't been established.
     *)
    {name = "splitTypes2", doit = SplitTypes.transform, execute = false} ::
    {name = "simplifyTypes", doit = SimplifyTypes.transform, execute = true} ::
