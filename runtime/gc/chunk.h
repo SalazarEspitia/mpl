@@ -72,6 +72,18 @@ struct HM_chunk {
   bool retireChunk;
 
   bool mightContainMultipleObjects;
+
+  /* The meaning of the mark bit (header bit 31) for the objects in this
+   * chunk: an object is marked iff its mark bit differs from markSense (see
+   * CC_isPointerMarked). A new chunk starts at 0, and so do the headers that
+   * the program and the runtime write, so new objects are unmarked. A
+   * concurrent collection flips markSense of every chunk it keeps, which
+   * unmarks at once all the objects it marked, instead of clearing them one
+   * by one. The program therefore never allocates into a chunk whose
+   * markSense is 1: such a chunk is never made a thread's currentChunk.
+   * Fits in the padding before tmpHeap, so the chunk header keeps its size. */
+  uint8_t markSense;
+
   void* tmpHeap;
 
   SuperBlock container;

@@ -116,8 +116,21 @@ bool CC_closeStack(ConcurrentPackage cp, HM_chunkList removed) {
   return CC_stack_try_close(cp->rootList, removed);
 }
 
+/* Marked means: the mark bit differs from the markSense of the object's
+ * chunk (see struct HM_chunk). markObj toggles the bit, so it toggles this
+ * too. */
 bool CC_isPointerMarked (pointer p) {
-  return ((MARK_MASK & getHeader (p)) == MARK_MASK);
+  GC_header bit = (getHeader(p) & MARK_MASK) >> MARK_SHIFT;
+  return bit != (GC_header)(HM_getChunkOf(p)->markSense);
+}
+
+/* Make the header of p say "unmarked" in p's own chunk. Only for an object
+ * that nobody else can see yet: a copy made by a local collection, before it
+ * is published. A plain store, not an atomic one. */
+void CC_setUnmarked (pointer p) {
+  GC_header* hp = getHeaderp(p);
+  GC_header bit = (GC_header)(HM_getChunkOf(p)->markSense) << MARK_SHIFT;
+  *hp = (*hp & ~MARK_MASK) | bit;
 }
 
 bool chunkIsInList(HM_chunk chunk, HM_chunkList list) {

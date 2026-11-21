@@ -105,6 +105,7 @@ HM_chunk HM_initializeChunk(pointer start, pointer end) {
   chunk->startGap = 0;
   chunk->pinnedDuringCollection = FALSE;
   chunk->mightContainMultipleObjects = TRUE;
+  chunk->markSense = 0;
   chunk->tmpHeap = NULL;
   chunk->decheckState = DECHECK_BOGUS_TID;
   chunk->retireChunk = FALSE;

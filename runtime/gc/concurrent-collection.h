@@ -104,6 +104,7 @@ void CC_initStack(GC_state s, ConcurrentPackage cp);
 
 
 bool CC_isPointerMarked (pointer p);
+void CC_setUnmarked (pointer p);
 void printObjPtrFunction(GC_state s, objptr* opp, void* rawArgs);
 void CC_clearMutationStack(ConcurrentPackage cp);
 #endif
