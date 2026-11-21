@@ -603,6 +603,12 @@ void HM_HHC_collectLocal(GC_state s, uint32_t desiredScope)
 
   LOG(LM_HH_COLLECTION, LL_DEBUG, "END root copy");
 
+  /* The current thread object is a root. When its chunk is in scope, the
+   * root copy above has copied it and updated s->currentThread, and the
+   * from-space copy is freed below. The rest of the collection sets the
+   * thread's heap, chunk and counters, so it has to use the new copy. */
+  thread = getThreadCurrent(s);
+
   /* do copy-collection */
   oldObjectCopied = forwardHHObjptrArgs.objectsCopied;
   /*
