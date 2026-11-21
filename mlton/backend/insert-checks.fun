@@ -616,7 +616,13 @@ fun isolateBigTransfers (f: Function.t): Function.t =
 (* Enforce that a block allocates at most `maxAlloc` bytes, by splitting
  * it into multiple blocks if necessary. Returns a list of new blocks;
  * if a block does not need to be split, this will just be a singleton.
- * Assumes big transfers have already been isolated. *)
+ * Assumes big transfers have already been isolated.
+ *
+ * A big transfer (see `BytesAllocated.isBig`) is left alone: its block has
+ * no statements, so there is nothing to split, and its allocation may
+ * exceed `maxAlloc`. This covers a `Static` transfer over 512 bytes, such
+ * as an IntInf primitive whose arguments have been constant folded, as
+ * well as a `Dynamic` one. *)
 fun restrictAllocInBlock
   (originalBlock as
    Block.T {args=originalArgs,
@@ -630,8 +636,9 @@ fun restrictAllocInBlock
     (* In this case, it should be an isolated transfer, i.e. no statements. *)
     BytesAllocated.Dynamic _ => [originalBlock]
     (* Otherwise we take into account the bytes needed for the transfer. *)
-  | BytesAllocated.Static transferBytes =>
-      if Bytes.<= (Block.objectBytesAllocated (originalBlock, {tyconTy = tyconTy}), maxAlloc)
+  | transferBytesAllocated as BytesAllocated.Static transferBytes =>
+      if BytesAllocated.isBig transferBytesAllocated
+         orelse Bytes.<= (Block.objectBytesAllocated (originalBlock, {tyconTy = tyconTy}), maxAlloc)
       then [originalBlock]
       else
       let
