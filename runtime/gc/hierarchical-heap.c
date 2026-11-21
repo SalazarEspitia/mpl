@@ -781,7 +781,11 @@ void mergeCompletedCCs(GC_state s, HM_HierarchicalHeap hh) {
     assert(HM_HH_getDepth(hh) == HM_HH_getDepth(subhh));
     assert(NULL != subhh->subHeapCompletedCC);
 
-    if (HM_HH_getConcurrentPack(subhh)->ccstate != CC_DONE) {
+    /* acquire: pairs with the CC_DONE store after CC_collectWithRoots, so
+     * that the mark senses it flipped are seen before its chunks are merged
+     * into this heap and read by this processor's write barrier. */
+    if (__atomic_load_n(&(HM_HH_getConcurrentPack(subhh)->ccstate), __ATOMIC_ACQUIRE)
+        != CC_DONE) {
       // This CC still in progress. Skip.
       cursor = &(subhh->subHeapForCC);
       subhh = *cursor;

@@ -344,29 +344,6 @@ void tryMarkAndAddToWorkList(
   }
 }
 
-void tryUnmarkAndAddToWorkList(
-  GC_state s,
-  __attribute__((unused)) objptr *opp,
-  objptr op,
-  void* rawArgs)
-{
-  ConcurrentCollectArgs* args = (ConcurrentCollectArgs*)rawArgs;
-  assert(isObjptr(op));
-  pointer p = objptrToPointer (op, NULL);
-  HM_chunk chunk = HM_getChunkOf(p);
-
-  if (!isChunkInToSpace(chunk, rawArgs)) {
-    return;
-  }
-
-  if (CC_isPointerMarked(p)) {
-    assert(isChunkInToSpace(chunk, args));
-    markObj(p);
-    assert(!CC_isPointerMarked(p));
-    CC_workList_push(s, &(args->worklist), op);
-  }
-}
-
 void markLoop(GC_state s, ConcurrentCollectArgs* args) {
   struct GC_foreachObjptrClosure markAddClosure =
     {.fun = tryMarkAndAddToWorkList, .env = (void*)args};
@@ -382,29 +359,9 @@ void markLoop(GC_state s, ConcurrentCollectArgs* args) {
   assert(CC_workList_isEmpty(s, worklist));
 }
 
-void unmarkLoop(GC_state s, ConcurrentCollectArgs* args) {
-  struct GC_foreachObjptrClosure unmarkAddClosure =
-    {.fun = tryUnmarkAndAddToWorkList, .env = (void*)args};
-
-  CC_workList worklist = &(args->worklist);
-
-  objptr* current = CC_workList_pop(s, worklist);
-  while (NULL != current) {
-    callIfIsObjptr(s, &unmarkAddClosure, current);
-    current = CC_workList_pop(s, worklist);
-  }
-
-  assert(CC_workList_isEmpty(s, worklist));
-}
-
 void tryMarkAndMarkLoop(GC_state s, objptr *opp, objptr op, void* rawArgs) {
   tryMarkAndAddToWorkList(s, opp, op, rawArgs);
   markLoop(s, rawArgs);
-}
-
-void tryUnmarkAndUnmarkLoop(GC_state s, objptr *opp, objptr op, void* rawArgs) {
-  tryUnmarkAndAddToWorkList(s, opp, op, rawArgs);
-  unmarkLoop(s, rawArgs);
 }
 
 #if 0
@@ -505,38 +462,6 @@ void unmarkPtrChunk(GC_state s, objptr* opp, void* rawArgs) {
 // #endif
 // }
 
-void unmarkPinned(
-  GC_state s,
-  HM_remembered remElem,
-  void* rawArgs)
-{
-  objptr src = remElem->object;
-  assert(!(HM_getChunkOf(objptrToPointer(src, NULL))->pinnedDuringCollection));
-  tryUnmarkAndUnmarkLoop(s, &src, src, rawArgs);
-  if (remElem->from != BOGUS_OBJPTR) {
-    tryUnmarkAndUnmarkLoop(s, &(remElem->from), remElem->from, rawArgs);
-  }
-  // unmarkPtrChunk(s, &src, rawArgs);
-  // unmarkPtrChunk(s, &(remElem->from), rawArgs);
-
-#if 0
-#if ASSERT
-  HM_chunk fromChunk = HM_getChunkOf(objptrToPointer(remElem->from, NULL));
-  HM_chunk objChunk = HM_getChunkOf(objptrToPointer(remElem->object, NULL));
-  assert(!isChunkInFromSpace(fromChunk, rawArgs));
-  assert(!isChunkInToSpace(fromChunk, rawArgs));
-  assert(
-    HM_HH_getDepth(HM_getLevelHead(fromChunk))
-    <=
-    HM_HH_getDepth(HM_getLevelHead(objChunk))
-  );
-#endif
-#endif
-
-  // TODO: SAM_NOTE: check this??
-  // unmarkPtrChunk(s, &dst, rawArgs);
-}
-
 // This function does more than forwardPtrChunk.
 // It scans the object pointed by the pointer even if its not in scope.
 // Recursively however it only calls forwardPtrChunk and not itself
@@ -563,27 +488,6 @@ void forceForward(GC_state s, objptr *opp, void* rawArgs) {
 
   CC_workList_push(s, &(args->worklist), op);
   markLoop(s, rawArgs);
-}
-
-void forceUnmark (GC_state s, objptr* opp, void* rawArgs) {
-  ConcurrentCollectArgs *args = (ConcurrentCollectArgs*)rawArgs;
-  objptr op = *opp;
-  pointer p = objptrToPointer(op, NULL);
-
-  if (!isObjptr(op)) {
-    return;
-  }
-
-  assert(isObjptr(op));
-
-  if(CC_isPointerMarked(p)){
-    assert(getTransitivePtr(p, rawArgs) == p);
-    markObj(p);
-    assert(!CC_isPointerMarked(p));
-  }
-
-  CC_workList_push(s, &(args->worklist), op);
-  unmarkLoop(s, rawArgs);
 }
 
 void ensureCallSanity(
@@ -1076,23 +980,12 @@ void CC_collectWithRoots(
 //   }
 // #endif
 
-  struct HM_foreachDownptrClosure unmarkPinnedClosure =
-    {.fun = unmarkPinned, .env = &lists};
-  HM_foreachRemembered(s, HM_HH_getRemSet(targetHH), &unmarkPinnedClosure, false);
-
-  forceUnmark(s, &(cp->snapLeft), &lists);
-  forceUnmark(s, &(cp->snapRight), &lists);
-  forceUnmark(s, &(cp->snapTemp), &lists);
-  // forceUnmark(s, &(s->wsQueue), &lists);
-  forceUnmark(s, &(cp->stack), &lists);
-  forceUnmark(s, &(cp->additionalStack), &lists);
-
-  unmarkLoop(s, &lists);
-
-  // forEachObjptrinStack(s, cp->rootList, unmarkPtrChunk, &lists);
-  forEachObjptrInCCStackBag(s, removedFromCCBag, tryUnmarkAndUnmarkLoop, &lists);
-  unmarkLoop(s, &lists);
-
+  /* No unmark pass: the marks are cleared below, by flipping the mark sense
+   * of every chunk this collection keeps (see struct HM_chunk). Tracing from
+   * the roots again to unmark would not reach every marked object: the
+   * program can make a marked object reachable only through objects outside
+   * this collection's scope, and the write barrier does not log old values
+   * that are already marked. */
   HM_freeChunksInListWithInfo(s, removedFromCCBag, NULL, BLOCK_FOR_FORGOTTEN_SET);
 
   assert(CC_workList_isEmpty(s, &(lists.worklist)));
@@ -1183,9 +1076,30 @@ void CC_collectWithRoots(
   HM_freeChunksInListWithInfo(s, origList, &infoc, BLOCK_FOR_HEAP_CHUNK);
   HM_freeChunksInListWithInfo(s, deleteList, &infoc, BLOCK_FOR_HEAP_CHUNK);
 
+  /* Unmark everything this collection marked, at once. Every object it
+   * marked is in a chunk it kept (saveNoForward runs before every mark), and
+   * the marks of this collection are the only marks in these chunks: local
+   * collections skip levels with a collection in progress
+   * (minDepthWithoutCC), other concurrent collections only mark in chunks
+   * they claimed, and nothing allocates here after the snapshot
+   * (splitHeapForCC gives the program a new chunk).
+   *
+   * So flipping the sense of each kept chunk makes every object that this
+   * collection reached unmarked, and every object it did not reach marked.
+   * The latter are garbage: nothing reaches them again, so their marks are
+   * never read. What this needs is that marking reached every object that
+   * is live: an object left unmarked here would read as marked in the next
+   * collection, which would then not trace its children.
+   *
+   * Nobody but the program's write barrier reads these marks while we flip
+   * them, and the barrier only uses them to decide whether to log an old
+   * value for this collection, whose root list is closed by now. The flips
+   * are published by the CC_DONE store in the caller; mergeCompletedCCs
+   * reads that with acquire before these chunks join another heap. */
   for(HM_chunk chunk = repList->firstChunk;
     chunk!=NULL; chunk = chunk->nextChunk) {
     chunk->tmpHeap = NULL;
+    chunk->markSense ^= 1;
   }
 
   // HM_appendChunkList(repList, origList);
