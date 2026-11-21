@@ -93,10 +93,40 @@ void GC_switchToThread (GC_state s, pointer p, size_t ensureBytesFree) {
   switchToSignalHandlerThreadIfNonAtomicAndSignalPending(s);
 
   assert(threadAndHeapOkay(s));
-  s->frontier = HM_HH_getFrontier(getThreadCurrent(s));
-  s->limitPlusSlop = HM_HH_getLimit(getThreadCurrent(s));
+  GC_thread thread = getThreadCurrent(s);
+  s->frontier = HM_HH_getFrontier(thread);
+  s->limitPlusSlop = HM_HH_getLimit(thread);
   s->limit = s->limitPlusSlop - GC_HEAP_LIMIT_SLOP;
-  HM_ensureHierarchicalHeapAssurances(s, FALSE, getThreadCurrent(s)->bytesNeeded, FALSE);
+
+  /* A thread that resumes at depth 1 or deeper while its current chunk is
+   * in a depth-0 heap gets a fresh chunk at its own depth. This happens
+   * after the scheduler boots: it moves the original thread to depth 1
+   * (setDepth changes only the thread's depth), and the thread would
+   * otherwise keep allocating in its depth-0 chunk until something moves it,
+   * such as that chunk filling up, a large array, or a promoted par.
+   * The depth-0 heap is never collected, and anything stored into an object
+   * there is pinned until exit, so every value ever stored into the
+   * program's first top-level refs and arrays would be retained.
+   *
+   * Doing this when the thread resumes, rather than in setDepth, leaves
+   * what it allocated before switching away where it is. At boot, that is
+   * everything up to the creation of the scheduler thread, whose stack (a
+   * copy of the original thread's) refers to those objects.
+   *
+   * Only depth 0: a thread also resumes in a chunk at a shallower depth of 1
+   * or more (a new task thread starts in a heap at its parent's depth), and
+   * those heaps are collected. */
+  bool leaveDepth0Chunk =
+    thread->currentDepth > 0 &&
+    HM_HH_getDepth(HM_getLevelHead(thread->currentChunk)) == 0;
+  if (leaveDepth0Chunk) {
+    LOG(LM_THREAD, LL_INFO,
+      "thread %p resumes at depth %"PRIu32" in a depth-0 chunk: moving it to a fresh chunk",
+      (void*)thread,
+      thread->currentDepth);
+  }
+
+  HM_ensureHierarchicalHeapAssurances(s, FALSE, thread->bytesNeeded, leaveDepth0Chunk);
 
   LOG(LM_THREAD, LL_DEBUG,
     "GC_switchToThread succeeded: old current = %p, new = %p",
