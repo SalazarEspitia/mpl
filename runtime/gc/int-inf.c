@@ -34,7 +34,7 @@ static inline GC_intInf toBignum (__attribute__((unused)) GC_state s,
     fprintf (stderr, "bp->header = "FMTHDR"\n", bp->header);
   /* Compare the type index and the valid bit only: a live IntInf may have
    * its pin bits set (it was stored into a shallower heap) or its mark bit
-   * (a collection is marking it). */
+   * (whose meaning depends on the object's chunk; see struct HM_chunk). */
   assert ((bp->header & (TYPE_INDEX_MASK | GC_VALID_HEADER_MASK))
           == GC_INTINF_HEADER);
   return bp;

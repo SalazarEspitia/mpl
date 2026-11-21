@@ -394,7 +394,10 @@ void GC_handlerLeaveHeapOfThread(
   assert(NULL != chunk);
   getThreadCurrent(s)->currentChunk = chunk;
 
-  if (!chunk->mightContainMultipleObjects) {
+  /* also never resume in a chunk whose mark sense is flipped (see struct
+   * HM_chunk): chunks that a concurrent collection kept reach depth 0 when
+   * their heap is promoted */
+  if (!chunk->mightContainMultipleObjects || chunk->markSense != 0) {
     if (!HM_HH_extend(s, getThreadCurrent(s), GC_HEAP_LIMIT_SLOP)) {
       DIE("Ran out of space for Hierarchical Heap!");
     }

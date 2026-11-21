@@ -1275,6 +1275,9 @@ pointer HM_HH_getFrontier(GC_thread thread) {
   pointer result = HM_getChunkFrontier(thread->currentChunk);
   assert(inFirstBlockOfChunk(thread->currentChunk, result)
          || HM_getChunkLimit(thread->currentChunk) == result);
+  /* the program writes headers with the mark bit 0, which says "unmarked"
+   * only in a chunk of sense 0 (see struct HM_chunk) */
+  assert(0 == thread->currentChunk->markSense);
   return result;
 }
 

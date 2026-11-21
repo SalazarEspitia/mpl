@@ -854,7 +854,11 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
   }
   thread->currentChunk = lastChunk;
 
-  if (lastChunk != NULL && !lastChunk->mightContainMultipleObjects)
+  /* The program must not allocate into a chunk whose mark sense is flipped
+   * (see struct HM_chunk). The last chunk can be one: a pinned chunk kept in
+   * place, or a chunk of an ancestor that a concurrent collection kept. */
+  if (lastChunk != NULL &&
+      (!lastChunk->mightContainMultipleObjects || lastChunk->markSense != 0))
   {
     if (!HM_HH_extend(s, thread, GC_HEAP_LIMIT_SLOP))
     {
@@ -1865,7 +1869,11 @@ HM_chunk ensureSpaceInTargetHeap(
   bool mustExtend = FALSE;
 
   HM_chunk chunk = HM_getChunkListLastChunk(tgtChunkList);
-  if (chunk == NULL || !chunk->mightContainMultipleObjects)
+  if (chunk == NULL || !chunk->mightContainMultipleObjects
+      /* never allocate into a chunk whose mark sense is flipped: objects
+       * copied there would have to be written with that sense, and the
+       * program must not resume there (see struct HM_chunk) */
+      || chunk->markSense != 0)
   {
     mustExtend = TRUE;
   }
@@ -1916,6 +1924,11 @@ objptr copyNonStackObject(
     );
   pointer frontier = HM_getChunkFrontier(chunk);
   GC_memcpy(p, frontier, copySize);
+  /* The mark bit was copied as is, but its meaning depends on the chunk (see
+   * struct HM_chunk). Objects are copied only when unmarked, so say that in
+   * the new chunk. */
+  assert(!CC_isPointerMarked(p + metaDataSize));
+  CC_setUnmarked(frontier + metaDataSize);
   pointer newFrontier = frontier + objectSizeIncludingMetadata;
   HM_updateChunkFrontierInList(HM_HH_getChunkList(tgtHeap), chunk, newFrontier);
   return pointerToObjptr(frontier + metaDataSize, NULL);
@@ -1936,6 +1949,9 @@ objptr copyStackObject(
   pointer frontier = HM_getChunkFrontier(chunk);
 
   GC_memcpy(p, frontier, GC_STACK_METADATA_SIZE);
+  /* as in copyNonStackObject: the copy is unmarked in its new chunk */
+  assert(!CC_isPointerMarked(p + GC_STACK_METADATA_SIZE));
+  CC_setUnmarked(frontier + GC_STACK_METADATA_SIZE);
   GC_stack from = (GC_stack)(p + GC_STACK_METADATA_SIZE);
   GC_stack to = (GC_stack)(frontier + GC_STACK_METADATA_SIZE);
   to->used = from->used;
