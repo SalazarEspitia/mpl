@@ -92,14 +92,16 @@ void startTiming (struct rusage *ru_start) {
   getrusage_thread (ru_start);
 }
 
-/* Accumulate and return time as number of milliseconds. */
-uintmax_t stopTiming (struct rusage *ru_start, struct rusage *ru_acc) {
+void stopTiming (struct rusage *ru_start,
+                 struct rusage *ru_acc1,
+                 struct rusage *ru_acc2) {
   struct rusage ru_finish, ru_total;
 
   getrusage_thread (&ru_finish);
   rusageMinusMax (&ru_finish, ru_start, &ru_total);
-  rusagePlusMax (ru_acc, &ru_total, ru_acc);
-  return rusageTime (&ru_total);
+  rusagePlusMax (ru_acc1, &ru_total, ru_acc1);
+  if (NULL != ru_acc2)
+    rusagePlusMax (ru_acc2, &ru_total, ru_acc2);
 }
 
 void timespec_now(struct timespec *x) {
