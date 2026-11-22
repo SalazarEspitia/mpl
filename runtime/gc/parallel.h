@@ -12,8 +12,6 @@ PRIVATE void Parallel_dekkerRelease (Bool, Pointer, Pointer, Pointer);
 
 PRIVATE Word32 Parallel_processorNumber (GC_state s);
 PRIVATE Word32 Parallel_numberOfProcessors (GC_state s);
-PRIVATE Word64 Parallel_maxBytesLive (void);
-PRIVATE void Parallel_resetBytesLive (void);
 PRIVATE Word64 Parallel_getTimeInGC (GC_state s);
 
 PRIVATE Int8 Parallel_fetchAndAdd8 (pointer p, Int8 v);
