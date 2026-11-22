@@ -191,6 +191,21 @@ void displayHeartbeatStatistics(FILE *out, GC_state s) {
   fprintf(out, "\n");
 }
 
+/* For the whole process, not per processor: the blocks the runtime holds
+ * now and at most so far (any purpose), and the memory it has mapped. */
+static void displayHeapStatistics(FILE *out, GC_state s) {
+  uintmax_t blockSize = s->controls->blockSize;
+  fprintf (out, "Heap::\n");
+  fprintf (out, "heap in use at exit: %s bytes\n",
+           uintmaxToCommaString (blockSize * queryBlocksInUse(s)));
+  /* the peak is counted in batches; see BLOCKS_IN_USE_BATCH */
+  fprintf (out, "heap in use, peak: %s bytes (within %s bytes)\n",
+           uintmaxToCommaString (blockSize * queryMaxBlocksInUse(s)),
+           uintmaxToCommaString (blockSize * s->numberOfProcs * (BLOCKS_IN_USE_BATCH - 1)));
+  fprintf (out, "heap mapped at exit: %s bytes\n",
+           uintmaxToCommaString (blockSize * queryBlocksMapped(s)));
+}
+
 void GC_done(GC_state s) {
   GC_PthreadAtExit(s);
 
@@ -210,6 +225,7 @@ void GC_done(GC_state s) {
                s->procStates[proc].cumulativeStatistics);
           displayHHAllocStats(s->controls->summaryFile, &(s->procStates[proc]));
         }
+        displayHeapStatistics(s->controls->summaryFile, s);
       } else {
         displayCumulativeStatistics(s->controls->summaryFile,
                                     s->cumulativeStatistics);
