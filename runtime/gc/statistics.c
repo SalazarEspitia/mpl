@@ -19,50 +19,22 @@ void outputCollectionStatisticsJSON(FILE* out,
 /* Function Definitions */
 /************************/
 
-struct GC_globalCumulativeStatistics* newGlobalCumulativeStatistics(void) {
-  struct GC_globalCumulativeStatistics* stats;
-
-  stats = malloc(sizeof(struct GC_globalCumulativeStatistics));
-  stats->maxHeapOccupancy = 0;
-
-  return stats;
-}
-
 struct GC_cumulativeStatistics *newCumulativeStatistics(void) {
   struct GC_cumulativeStatistics *cumulativeStatistics;
 
   cumulativeStatistics = (struct GC_cumulativeStatistics *)
     malloc (sizeof (struct GC_cumulativeStatistics));
   cumulativeStatistics->bytesAllocated = 0;
-  cumulativeStatistics->bytesPromoted = 0;
-  cumulativeStatistics->bytesFilled = 0;
-  cumulativeStatistics->bytesCopied = 0;
-  cumulativeStatistics->bytesCopiedMinor = 0;
-  cumulativeStatistics->bytesHashConsed = 0;
-  cumulativeStatistics->bytesMarkCompacted = 0;
-  cumulativeStatistics->bytesScannedMinor = 0;
   cumulativeStatistics->bytesHHLocaled = 0;
   cumulativeStatistics->bytesReclaimedByLocal = 0;
   cumulativeStatistics->bytesReclaimedByCC = 0;
   cumulativeStatistics->bytesInScopeForLocal = 0;
   cumulativeStatistics->bytesInScopeForCC = 0;
   cumulativeStatistics->maxBytesLive = 0;
-  cumulativeStatistics->maxBytesLiveSinceReset = 0;
-  cumulativeStatistics->maxHeapSize = 0;
-  cumulativeStatistics->maxHHLCS = 0;
-  cumulativeStatistics->maxHHLCHS = 0;
-  cumulativeStatistics->maxPauseTime = 0;
   cumulativeStatistics->maxStackSize = 0;
   cumulativeStatistics->maxStackFramesWalkedForHeartbeat = 0;
   cumulativeStatistics->maxStackSizeForHeartbeat = 0;
-  cumulativeStatistics->syncForOldGenArray = 0;
-  cumulativeStatistics->syncForNewGenArray = 0;
-  cumulativeStatistics->syncForStack = 0;
-  cumulativeStatistics->syncForHeap = 0;
-  cumulativeStatistics->syncMisc = 0;
-  cumulativeStatistics->numCardsMarked = 0;
   cumulativeStatistics->numCopyingGCs = 0;
-  cumulativeStatistics->numHashConsGCs = 0;
   cumulativeStatistics->numMarkCompactGCs = 0;
   cumulativeStatistics->numMinorGCs = 0;
   cumulativeStatistics->numHHLocalGCs = 0;
@@ -92,9 +64,6 @@ struct GC_cumulativeStatistics *newCumulativeStatistics(void) {
   rusageZero (&cumulativeStatistics->ru_gcCC);
   rusageZero (&cumulativeStatistics->ru_thread);
   cumulativeStatistics->ruThreadRecorded = FALSE;
-  rusageZero (&cumulativeStatistics->ru_crit);
-  rusageZero (&cumulativeStatistics->ru_sync);
-  rusageZero (&cumulativeStatistics->ru_bsp);
 
   timespec_now(&(cumulativeStatistics->lastHeartbeatHandlerTimestamp));
   timespec_now(&(cumulativeStatistics->lastHeartbeatSignalTimestamp));

@@ -21,19 +21,8 @@ enum {
   SYNC_SAVE_WORLD,
 };
 
-struct GC_globalCumulativeStatistics {
-  size_t maxHeapOccupancy;
-};
-
 struct GC_cumulativeStatistics {
   uintmax_t bytesAllocated;
-  uintmax_t bytesPromoted;
-  uintmax_t bytesFilled; /* i.e. unused gaps */
-  uintmax_t bytesCopied;
-  uintmax_t bytesCopiedMinor;
-  uintmax_t bytesHashConsed;
-  uintmax_t bytesMarkCompacted;
-  uintmax_t bytesScannedMinor;
   uintmax_t bytesHHLocaled;
   uintmax_t bytesReclaimedByLocal;
   uintmax_t bytesReclaimedByCC;
@@ -41,29 +30,13 @@ struct GC_cumulativeStatistics {
   uintmax_t bytesInScopeForCC;
 
   size_t maxBytesLive;
-  size_t maxBytesLiveSinceReset;
-  size_t maxHeapSize;
 
-  size_t maxHHLCS;
-  size_t maxHHLCHS;
-
-  uintmax_t maxPauseTime;
   size_t maxStackSize;
 
   size_t maxStackFramesWalkedForHeartbeat;
   size_t maxStackSizeForHeartbeat;
 
-  uintmax_t syncForOldGenArray;
-  uintmax_t syncForNewGenArray;
-  uintmax_t syncForStack;
-  uintmax_t syncForHeap;
-  uintmax_t syncMisc;
-
-  uintmax_t numCardsMarked; /* Number of marked cards seen during minor GCs. */
-
-  uintmax_t numGCs;
   uintmax_t numCopyingGCs;
-  uintmax_t numHashConsGCs;
   uintmax_t numMarkCompactGCs;
   uintmax_t numMinorGCs;
   uintmax_t numHHLocalGCs;
@@ -97,10 +70,6 @@ struct GC_cumulativeStatistics {
   struct rusage ru_thread;
   bool ruThreadRecorded;
 
-  struct rusage ru_crit; /* total time in critical sections */
-  struct rusage ru_sync; /* total time synchronizing for critical sections */
-  struct rusage ru_bsp; /* total time in BSP rounds */
-
   struct timespec lastHeartbeatHandlerTimestamp;
   struct timespec lastHeartbeatSignalTimestamp;
   TimeHistogram heartbeatHandlers;
@@ -118,7 +87,6 @@ struct GC_lastMajorStatistics {
 
 #if (defined (MLTON_GC_INTERNAL_FUNCS))
 
-struct GC_globalCumulativeStatistics* newGlobalCumulativeStatistics(void);
 struct GC_cumulativeStatistics* newCumulativeStatistics(void);
 struct GC_lastMajorStatistics* newLastMajorStatistics(void);
 
