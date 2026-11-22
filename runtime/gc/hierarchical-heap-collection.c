@@ -1010,15 +1010,9 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
 
   if (needGCTime(s))
   {
-    if (detailedGCTime(s))
-    {
-      stopTiming(&ru_start, &s->cumulativeStatistics->ru_gcHHLocal);
-    }
-    /*
-     * RAM_NOTE: small extra here since I recompute delta, but probably not a
-     * big deal...
-     */
-    stopTiming(&ru_start, &s->cumulativeStatistics->ru_gc);
+    stopTiming(&ru_start,
+                &s->cumulativeStatistics->ru_gc,
+                detailedGCTime(s) ? &s->cumulativeStatistics->ru_gcHHLocal : NULL);
   }
 
   Trace0(EVENT_LGC_LEAVE);
