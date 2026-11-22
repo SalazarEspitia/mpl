@@ -68,6 +68,10 @@ static uintmax_t timespecToMillis (struct timespec *t) {
   return (uintmax_t)t->tv_sec * 1000 + (uintmax_t)t->tv_nsec / 1000000;
 }
 
+static uintmax_t timevalToMillis (struct timeval *t) {
+  return (uintmax_t)t->tv_sec * 1000 + (uintmax_t)t->tv_usec / 1000;
+}
+
 static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatistics *cumulativeStatistics) {
   struct rusage ru_total;
   uintmax_t totalTime;
@@ -100,6 +104,9 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
   fprintf (out, "local collections: wall time: %s ms, plus %s ms on remembered sets\n",
            uintmaxToCommaString (timespecToMillis (&cumulativeStatistics->timeLocalGC)),
            uintmaxToCommaString (timespecToMillis (&cumulativeStatistics->timeLocalPromo)));
+  fprintf (out, "local collections: cpu time: user %s ms, system %s ms\n",
+           uintmaxToCommaString (timevalToMillis (&cumulativeStatistics->ru_gcHHLocal.ru_utime)),
+           uintmaxToCommaString (timevalToMillis (&cumulativeStatistics->ru_gcHHLocal.ru_stime)));
   fprintf (out, "local collections: bytes in scope: %s bytes\n",
            uintmaxToCommaString (cumulativeStatistics->bytesInScopeForLocal));
   fprintf (out, "local collections: bytes reclaimed: %s bytes\n",
@@ -108,6 +115,9 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
            uintmaxToCommaString (cumulativeStatistics->numCCs));
   fprintf (out, "concurrent collections: wall time: %s ms\n",
            uintmaxToCommaString (timespecToMillis (&cumulativeStatistics->timeCC)));
+  fprintf (out, "concurrent collections: cpu time: user %s ms, system %s ms\n",
+           uintmaxToCommaString (timevalToMillis (&cumulativeStatistics->ru_gcCC.ru_utime)),
+           uintmaxToCommaString (timevalToMillis (&cumulativeStatistics->ru_gcCC.ru_stime)));
   fprintf (out, "concurrent collections: bytes in scope: %s bytes\n",
            uintmaxToCommaString (cumulativeStatistics->bytesInScopeForCC));
   fprintf (out, "concurrent collections: bytes reclaimed: %s bytes\n",

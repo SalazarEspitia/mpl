@@ -454,6 +454,10 @@ void GC_getGCRusageOfProc (GC_state s, int32_t p, struct rusage* rusage) {
       rusagePlusMax(rusage,
                     &(s->procStates[proc].cumulativeStatistics->ru_gcHHLocal),
                     rusage);
+      /* and so are concurrent collections */
+      rusagePlusMax(rusage,
+                    &(s->procStates[proc].cumulativeStatistics->ru_gcCC),
+                    rusage);
     }
   } else {
     /* get processor gc rusage */
@@ -479,6 +483,9 @@ void GC_getGCRusageOfProc (GC_state s, int32_t p, struct rusage* rusage) {
 
     rusagePlusMax(rusage,
                   &(s->procStates[p].cumulativeStatistics->ru_gcHHLocal),
+                  rusage);
+    rusagePlusMax(rusage,
+                  &(s->procStates[p].cumulativeStatistics->ru_gcCC),
                   rusage);
   }
 }

@@ -934,8 +934,11 @@ void CC_collectWithRoots(
 
   struct timespec startTime;
   struct timespec stopTime;
+  struct rusage ru_start;
 
   Trace0(EVENT_CGC_ENTER);
+  if (needGCTime(s))
+    startTiming(&ru_start);
   timespec_now(&startTime);
 
   LOG(LM_CC_COLLECTION, LL_INFO,
@@ -1221,6 +1224,10 @@ void CC_collectWithRoots(
   timespec_now(&stopTime);
   timespec_sub(&stopTime, &startTime);
   timespec_add(&(s->cumulativeStatistics->timeCC), &stopTime);
+  if (needGCTime(s))
+    stopTiming(&ru_start,
+                &s->cumulativeStatistics->ru_gc,
+                detailedGCTime(s) ? &s->cumulativeStatistics->ru_gcCC : NULL);
   s->cumulativeStatistics->numCCs++;
   assert(bytesScanned >= bytesSaved);
   uintmax_t bytesReclaimed = bytesScanned-bytesSaved;
