@@ -154,6 +154,10 @@ size_t HM_HH_addRecentBytesAllocated(GC_thread thread, size_t bytes);
 
 uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread);
 
+/* TRUE while no scheduler is running and the thread runs at depth 0. Its
+ * root heap can then be collected locally (see HM_HHC_collectLocal). */
+bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread);
+
 void HM_HH_forceLeftHeap(GC_state s, uint32_t processor, pointer threadp);
 void HM_HH_forceNewChunk(GC_state s);
 pointer HM_HH_getRoot(GC_state s, pointer threadp);

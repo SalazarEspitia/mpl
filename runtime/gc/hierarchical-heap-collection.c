@@ -109,6 +109,12 @@ objptr copyStackObject(
 
 void delLastObj(objptr op, size_t objectSize, HM_HierarchicalHeap tgtHeap);
 
+/* collections of a root heap only (see HM_HHC_collectLocal) */
+static void noteOtherRootHeap(
+  struct HM_HHC_otherRootHeaps *other,
+  HM_HierarchicalHeap hh);
+static bool scanOtherRootHeaps(GC_state s, struct ForwardHHObjptrArgs *args);
+
 /**
  * ObjptrPredicateFunction for skipping stacks and threads in the hierarchical
  * heap.
@@ -220,15 +226,31 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
   //   return;
   // }
 
-  if (s->wsQueueTop == BOGUS_OBJPTR || s->wsQueueBot == BOGUS_OBJPTR)
+  /* Before the scheduler boots, only this thread runs SML code and nothing
+   * is registered in a deque, so the root heap can be collected like a leaf
+   * heap (HM_HH_canCollectRootHeap). Depth 0 then needs the full root set:
+   * the globals, which hold the statics copied in by initWorld, and the
+   * threads in GC_state. It also needs the other depth-0 heaps: the signal
+   * handler and C-call threads made by Thread.copy each have their own, and
+   * their stacks point into this one. Those are scanned in place. */
+  bool rootHeap = HM_HH_canCollectRootHeap(s, thread);
+  struct HM_HHC_otherRootHeaps otherRootHeaps =
+    {.heaps = NULL, .length = 0, .capacity = 0, .scanned = 0};
+
+  if (!rootHeap &&
+      (s->wsQueueTop == BOGUS_OBJPTR || s->wsQueueBot == BOGUS_OBJPTR))
   {
     LOG(LM_HH_COLLECTION, LL_DEBUG, "Skipping collection, deque not registered yet");
     return;
   }
 
-  uint64_t topval = *(uint64_t *)objptrToPointer(s->wsQueueTop, NULL);
-  uint32_t potentialLocalScope = UNPACK_IDX(topval);
-  uint32_t originalLocalScope = pollCurrentLocalScope(s);
+  uint32_t potentialLocalScope = 0;
+  uint32_t originalLocalScope = 0;
+  if (!rootHeap) {
+    uint64_t topval = *(uint64_t *)objptrToPointer(s->wsQueueTop, NULL);
+    potentialLocalScope = UNPACK_IDX(topval);
+    originalLocalScope = pollCurrentLocalScope(s);
+  }
 
   if (thread->currentDepth != originalLocalScope)
   {
@@ -253,17 +275,21 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
    */
   uint32_t minNoCC = minDepthWithoutCC(thread);
   uint32_t minOkay = desiredScope;
-  minOkay = max(minOkay, thread->minLocalCollectionDepth);
+  /* the scheduler's limit; before it boots, nothing has set it */
+  if (!rootHeap)
+    minOkay = max(minOkay, thread->minLocalCollectionDepth);
   minOkay = max(minOkay, minNoCC);
   uint32_t minDepth = originalLocalScope;
-  while (minDepth > minOkay && tryClaimLocalScope(s))
-  {
-    minDepth--;
+  if (!rootHeap) {
+    while (minDepth > minOkay && tryClaimLocalScope(s))
+    {
+      minDepth--;
+      assert(minDepth == pollCurrentLocalScope(s));
+    }
     assert(minDepth == pollCurrentLocalScope(s));
   }
-  assert(minDepth == pollCurrentLocalScope(s));
 
-  if (minDepth == 0 ||
+  if ((minDepth == 0 && !rootHeap) ||
       minOkay > minDepth ||
       minDepth > thread->currentDepth)
   {
@@ -280,7 +306,8 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
         desiredScope,
         potentialLocalScope);
 
-    releaseLocalScope(s, originalLocalScope);
+    if (!rootHeap)
+      releaseLocalScope(s, originalLocalScope);
     return;
   }
 
@@ -304,6 +331,11 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
     minDepth = maxDepth;
   }
 
+  /* Before the boot nothing remembers at depth 0: the write barrier makes
+   * no pin between depth-0 heaps then, and nothing else runs (no CC, no
+   * entanglement). */
+  assert(!rootHeap || 0 == HM_numRemembered(HM_HH_getRemSet(hh)));
+
   /* copy roots */
   struct ForwardHHObjptrArgs forwardHHObjptrArgs = {
       .hh = hh,
@@ -322,7 +354,8 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
       .stacksCopied = 0,
       .bytesMoved = 0,
       .objectsMoved = 0,
-      .concurrent = false};
+      .concurrent = false,
+      .otherRootHeaps = rootHeap ? &otherRootHeaps : NULL};
   CC_workList_init(s, &(forwardHHObjptrArgs.worklist));
   struct GC_foreachObjptrClosure forwardHHObjptrClosure =
       {.fun = forwardHHObjptr, .env = &forwardHHObjptrArgs};
@@ -587,19 +620,30 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
 
   /* ======================================================================= */
 
-  /* forward contents of deque, only for the range of the deque that is
-   * in-scope of this collection. */
-  oldObjectCopied = forwardHHObjptrArgs.objectsCopied;
-  foreachObjptrInSequenceSlice(
-    s,
-    objptrToPointer(s->wsQueue, NULL),
-    &forwardHHObjptrClosure,
-    minDepth,
-    originalLocalScope
-  );
-  LOG(LM_HH_COLLECTION, LL_DEBUG,
-      "Copied %" PRIu64 " objects from deque",
-      forwardHHObjptrArgs.objectsCopied - oldObjectCopied);
+  if (rootHeap) {
+    /* The globals (and with them the statics), the root static heap, and
+     * the threads that GC_state holds for every processor: the signal
+     * handler and C-call threads point into this heap. There is no deque. */
+    oldObjectCopied = forwardHHObjptrArgs.objectsCopied;
+    foreachGlobalObjptr(s, &forwardHHObjptrClosure);
+    LOG(LM_HH_COLLECTION, LL_DEBUG,
+        "Copied %" PRIu64 " objects from globals",
+        forwardHHObjptrArgs.objectsCopied - oldObjectCopied);
+  } else {
+    /* forward contents of deque, only for the range of the deque that is
+     * in-scope of this collection. */
+    oldObjectCopied = forwardHHObjptrArgs.objectsCopied;
+    foreachObjptrInSequenceSlice(
+      s,
+      objptrToPointer(s->wsQueue, NULL),
+      &forwardHHObjptrClosure,
+      minDepth,
+      originalLocalScope
+    );
+    LOG(LM_HH_COLLECTION, LL_DEBUG,
+        "Copied %" PRIu64 " objects from deque",
+        forwardHHObjptrArgs.objectsCopied - oldObjectCopied);
+  }
 
   LOG(LM_HH_COLLECTION, LL_DEBUG, "END root copy");
 
@@ -622,46 +666,52 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
   //                                            NULL)
   // };
 
-  /* off-by-one to prevent underflow */
-  uint32_t depth = thread->currentDepth + 1;
-  while (depth > forwardHHObjptrArgs.minDepth)
-  {
-    depth--;
-    HM_HierarchicalHeap toSpaceLevel = toSpace[depth];
-    if (NULL == toSpaceLevel)
+  /* Scan the to-space. In a collection of a root heap, then scan the other
+   * root heaps it has reached, and the to-space again from where it
+   * stopped, until neither has anything left. */
+  uint32_t depth;
+  do {
+    /* off-by-one to prevent underflow */
+    depth = thread->currentDepth + 1;
+    while (depth > forwardHHObjptrArgs.minDepth)
     {
-      continue;
+      depth--;
+      HM_HierarchicalHeap toSpaceLevel = toSpace[depth];
+      if (NULL == toSpaceLevel)
+      {
+        continue;
+      }
+
+      LOG(LM_HH_COLLECTION, LL_INFO,
+          "level %" PRIu32 ": num pinned: %zu",
+          depth,
+          HM_numRemembered(HM_HH_getRemSet(toSpaceLevel)));
+
+      /* forward the from-elements of the down-ptrs */
+      struct HM_foreachDownptrClosure closure =
+          {.fun = forwardFromObjsOfRemembered, .env = (void *)&forwardHHObjptrArgs};
+      // HM_foreachRemembered pops the public remSet into private. So it interferes
+      // with the unmarking phase of GC. So use HM_foreachPrivate instead.
+      HM_foreachPrivate(s, &(HM_HH_getRemSet(toSpaceLevel)->private), &closure);
+
+      if (NULL != HM_HH_getChunkList(toSpaceLevel)->firstChunk)
+      {
+        HM_chunkList toSpaceList = HM_HH_getChunkList(toSpaceLevel);
+        pointer start = toSpaceStart[depth] != NULL ? toSpaceStart[depth] : HM_getChunkStart(toSpaceList->firstChunk);
+        HM_chunk startChunk = toSpaceStartChunk[depth] != NULL ? toSpaceStartChunk[depth] : toSpaceList->firstChunk;
+        HM_forwardHHObjptrsInChunkList(
+            s,
+            startChunk,
+            start,
+            // &skipStackAndThreadObjptrPredicate,
+            // &ssatoPredicateArgs,
+            &trueObjptrPredicate,
+            NULL,
+            &forwardHHObjptr,
+            &forwardHHObjptrArgs);
+      }
     }
-
-    LOG(LM_HH_COLLECTION, LL_INFO,
-        "level %" PRIu32 ": num pinned: %zu",
-        depth,
-        HM_numRemembered(HM_HH_getRemSet(toSpaceLevel)));
-
-    /* forward the from-elements of the down-ptrs */
-    struct HM_foreachDownptrClosure closure =
-        {.fun = forwardFromObjsOfRemembered, .env = (void *)&forwardHHObjptrArgs};
-    // HM_foreachRemembered pops the public remSet into private. So it interferes
-    // with the unmarking phase of GC. So use HM_foreachPrivate instead.
-    HM_foreachPrivate(s, &(HM_HH_getRemSet(toSpaceLevel)->private), &closure);
-
-    if (NULL != HM_HH_getChunkList(toSpaceLevel)->firstChunk)
-    {
-      HM_chunkList toSpaceList = HM_HH_getChunkList(toSpaceLevel);
-      pointer start = toSpaceStart[depth] != NULL ? toSpaceStart[depth] : HM_getChunkStart(toSpaceList->firstChunk);
-      HM_chunk startChunk = toSpaceStartChunk[depth] != NULL ? toSpaceStartChunk[depth] : toSpaceList->firstChunk;
-      HM_forwardHHObjptrsInChunkList(
-          s,
-          startChunk,
-          start,
-          // &skipStackAndThreadObjptrPredicate,
-          // &ssatoPredicateArgs,
-          &trueObjptrPredicate,
-          NULL,
-          &forwardHHObjptr,
-          &forwardHHObjptrArgs);
-    }
-  }
+  } while (rootHeap && scanOtherRootHeaps(s, &forwardHHObjptrArgs));
 
   LOG(LM_HH_COLLECTION, LL_DEBUG,
       "Copied %" PRIu64 " objects in copy-collection",
@@ -1032,11 +1082,86 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
   LOG(LM_HH_COLLECTION, LL_DEBUG,
       "END");
 
-  releaseLocalScope(s, originalLocalScope);
+  if (rootHeap)
+    free(otherRootHeaps.heaps);
+  else
+    releaseLocalScope(s, originalLocalScope);
   return;
 }
 
 /* ========================================================================= */
+
+static void noteOtherRootHeap(
+  struct HM_HHC_otherRootHeaps *other,
+  HM_HierarchicalHeap hh)
+{
+  assert(HM_HH_isLevelHead(hh));
+  assert(0 == HM_HH_getDepth(hh));
+
+  /* Few heaps (a few per processor), and pointers into one tend to come
+   * together: check the last one first. */
+  if (other->length > 0 && other->heaps[other->length - 1] == hh)
+    return;
+  for (size_t i = 0; i < other->length; i++) {
+    if (other->heaps[i] == hh)
+      return;
+  }
+
+  if (other->length == other->capacity) {
+    size_t newCapacity = (0 == other->capacity) ? 16 : 2 * other->capacity;
+    HM_HierarchicalHeap *newHeaps =
+      malloc_safe(newCapacity * sizeof(HM_HierarchicalHeap));
+    if (other->length > 0)
+      memcpy(newHeaps, other->heaps, other->length * sizeof(HM_HierarchicalHeap));
+    free(other->heaps);
+    other->heaps = newHeaps;
+    other->capacity = newCapacity;
+  }
+  other->heaps[other->length++] = hh;
+}
+
+/* Scan, in place, the other root heaps reached since the last call, after
+ * noting where the scan of each to-space stopped, so that the next scan of
+ * the to-space starts there. Returns TRUE if it scanned any: their objects
+ * may have copied more into the to-space, and reached more heaps. */
+static bool scanOtherRootHeaps(GC_state s, struct ForwardHHObjptrArgs *args)
+{
+  struct HM_HHC_otherRootHeaps *other = args->otherRootHeaps;
+  assert(NULL != other);
+  if (other->scanned == other->length)
+    return FALSE;
+
+  for (uint32_t d = args->minDepth; d <= args->maxDepth; d++) {
+    if (NULL == args->toSpace[d])
+      continue;
+    HM_chunk last = HM_getChunkListLastChunk(HM_HH_getChunkList(args->toSpace[d]));
+    if (NULL != last) {
+      args->toSpaceStartChunk[d] = last;
+      args->toSpaceStart[d] = HM_getChunkFrontier(last);
+    }
+  }
+
+  while (other->scanned < other->length) {
+    HM_HierarchicalHeap hh = other->heaps[other->scanned++];
+    /* nothing to purge: see the assertion in HM_HHC_collectLocal */
+    assert(0 == HM_numRemembered(HM_HH_getRemSet(hh)));
+    HM_chunk first = HM_getChunkListFirstChunk(HM_HH_getChunkList(hh));
+    LOG(LM_HH_COLLECTION, LL_DEBUG,
+        "scanning other root heap %p in place",
+        (void *)hh);
+    if (NULL != first) {
+      HM_forwardHHObjptrsInChunkList(
+        s,
+        first,
+        HM_getChunkStart(first),
+        &trueObjptrPredicate,
+        NULL,
+        &forwardHHObjptr,
+        args);
+    }
+  }
+  return TRUE;
+}
 
 bool isObjptrInToSpace(objptr op, struct ForwardHHObjptrArgs *args)
 {
@@ -1701,7 +1826,9 @@ void forwardHHObjptr(
       op,
       (uintptr_t)p);
 
-  if (!isObjptr(op) || isObjptrInRootHeap(s, op))
+  /* Depth 0 is in scope only in a collection of a root heap, before the
+   * scheduler boots (minDepth is never 0 otherwise). */
+  if (!isObjptr(op) || (args->minDepth > 0 && isObjptrInRootHeap(s, op)))
   {
     /* does not point to an HH objptr, so not in scope for collection */
     LOG(LM_HH_COLLECTION, LL_DEBUGMORE,
@@ -1752,6 +1879,13 @@ void forwardHHObjptr(
            args->fromSpace[HM_getObjptrDepth(op)])
   {
     // assert (!decheck(s, op));
+    if (NULL != args->otherRootHeaps) {
+      /* another depth-0 heap, such as a signal handler thread's: scan it
+       * in place, since it can point back into this one */
+      assert(0 == opDepth);
+      noteOtherRootHeap(args->otherRootHeaps,
+        HM_getLevelHeadPathCompress(HM_getChunkOf(objptrToPointer(op, NULL))));
+    }
     return;
   }
 
@@ -1832,6 +1966,11 @@ void forwardHHObjptr(
       args->stacksCopied++;
       break;
     case WEAK_TAG:
+      /* Weak pointers are unsupported. Before the scheduler boots, keep
+       * them as strong pointers, as they behaved when nothing collected
+       * depth 0. */
+      if (NULL != args->otherRootHeaps)
+        break;
       die(__FILE__ ":%d: "
                    "forwardHHObjptr() does not support WEAK_TAG objects!",
           __LINE__);
