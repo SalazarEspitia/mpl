@@ -970,8 +970,18 @@ void HM_HH_maybeRequestCC(GC_state s) {
    * at the thread's next par or join: without this, a long stretch of
    * sequential allocation after a par that registered a CC (at a depth where
    * the clock below is off, because local collections are supposed to handle
-   * it) is not collected at all. */
-  if (NULL != hh->subHeapForCC) {
+   * it) is not collected at all.
+   *
+   * Only when the leaf is at the thread's current depth. After a spawn the
+   * thread is deeper than its leaf heap until something creates the current
+   * level, and the spawned child, if stolen, is running with the leaf as an
+   * ancestor: its write barrier can be pushing into the root list of one of
+   * the leaf's CC subheaps, which mergeCompletedCCs frees (CC_freeStack). The
+   * other places that merge (registerCont, promoteChunks) only do so at the
+   * current depth, when no child of the leaf is running. Nothing is lost by
+   * waiting: while a child is running, local collections can't reach the
+   * leaf's depth anyway. */
+  if (NULL != hh->subHeapForCC && HM_HH_getDepth(hh) == thread->currentDepth) {
     mergeCompletedCCs(s, hh);
     assert(thread->hierarchicalHeap == hh);
   }
