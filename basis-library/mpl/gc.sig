@@ -6,11 +6,20 @@
 
 signature MPL_GC =
 sig
-  (* An estimate of the current size of the heap. It should be reasonably
-   * accurate, although there could be concurrent allocations and/or
-   * collections happening, so no guarantees.
+  (* The current size of the heap, in bytes: the blocks the run-time system
+   * has taken from its block allocator, for objects or for its own data
+   * (remembered sets, work lists, ...), and not yet given back. Other
+   * processors may be allocating or collecting while it is read, so it is a
+   * snapshot of a moving value. Free space inside blocks counts as used.
    *)
   val currentHeapSize: unit -> IntInf.int
+
+  (* The memory the block allocator has mapped from the system and not
+   * released, in bytes; at least currentHeapSize. Mapped memory is reused,
+   * and not released while the program runs (except very large blocks), so
+   * this is also about the most it has held so far.
+   *)
+  val currentHeapMapped: unit -> IntInf.int
 
   (* How many times the read barrier has been triggered, which
    * checks that the program is disentangled.

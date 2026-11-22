@@ -222,6 +222,18 @@ void queryCurrentBlockUsage(
   size_t *blocksAllocated,
   size_t *blocksFreed);
 
+/** The number of blocks handed out (for any purpose) and not yet given
+  * back, summed over every processor's allocator and the global one. It
+  * reads the other processors' counters without stopping them, so it's a
+  * snapshot of a moving value. Blocks freed by a processor other than their
+  * owner count as in use until the owner takes them back.
+  */
+size_t queryBlocksInUse(GC_state s);
+
+/** The number of blocks mapped from the system and not yet released, not
+  * counting each superblock's header block. */
+size_t queryBlocksMapped(GC_state s);
+
 Sampler newBlockUsageSampler(GC_state s);
 
 #endif
