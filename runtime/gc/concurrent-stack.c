@@ -213,8 +213,9 @@ bool CC_stack_try_close(CC_stack* stack, HM_chunkList removed) {
       return TRUE;
     }
 
-    // Otherwise, we failed to close. Unlock everything before continuing.
-    for (size_t j = 0; j < i; j++) {
+    // Otherwise, we failed to close: bag i is non-empty. We hold the locks
+    // of bags 0 through i (i included); unlock them all before continuing.
+    for (size_t j = 0; j <= i; j++) {
       pthread_mutex_unlock(&(stack->stacks[j].mutex));
     }
   }
