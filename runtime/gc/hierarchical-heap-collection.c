@@ -1770,6 +1770,7 @@ void forwardHHObjptr(
   if (CC_isPointerMarked(p))
   {
     // this object is collected in-place.
+    assert(pinType(getHeader(p)) == PIN_ANY);
     return;
   }
 

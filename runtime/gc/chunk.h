@@ -80,7 +80,7 @@ struct HM_chunk {
    * concurrent collection flips markSense of every chunk it keeps, which
    * unmarks at once all the objects it marked, instead of clearing them one
    * by one. The program therefore never allocates into a chunk whose
-   * markSense is 1: such a chunk is never made a thread's currentChunk.
+   * markSense is 1: no thread resumes allocating in such a chunk.
    * Fits in the padding before tmpHeap, so the chunk header keeps its size. */
   uint8_t markSense;
 
