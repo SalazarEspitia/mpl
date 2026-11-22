@@ -1319,11 +1319,26 @@ size_t HM_HH_addRecentBytesAllocated(GC_thread thread, size_t bytes) {
   return thread->bytesAllocatedSinceLastCollection;
 }
 
+/* Before a scheduler boots, this processor is the only one running SML
+ * code: the others wait in Proc_waitForInitialization until
+ * MLton.Parallel.initializeProcessors (Parallel_init), and no deque is
+ * registered yet. A program that never loads the scheduler stays in this
+ * state. The thread's root heap can then be collected like a leaf heap,
+ * with the full root set (see HM_HHC_collectLocal). Once Parallel_init has
+ * run, depth 0 is never collected, as before. */
+bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread) {
+  return s->wsQueueTop == BOGUS_OBJPTR
+         && !Proc_isInitialized(s)
+         && 0 == thread->currentDepth
+         && 0 == HM_HH_getDepth(thread->hierarchicalHeap);
+}
+
 uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread)
 {
   struct HM_HierarchicalHeap* hh = thread->hierarchicalHeap;
+  bool rootHeap = HM_HH_canCollectRootHeap(s, thread);
 
-  if (s->wsQueueTop == BOGUS_OBJPTR)
+  if (s->wsQueueTop == BOGUS_OBJPTR && !rootHeap)
     return thread->currentDepth+1; /* don't collect */
 
   if (thread->bytesAllocatedSinceLastCollection <
@@ -1332,8 +1347,11 @@ uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread)
     return thread->currentDepth+1; /* don't collect */
   }
 
-  uint64_t topval = *(uint64_t*)objptrToPointer(s->wsQueueTop, NULL);
-  uint32_t potentialLocalScope = UNPACK_IDX(topval);
+  uint32_t potentialLocalScope = 0;
+  if (!rootHeap) {
+    uint64_t topval = *(uint64_t*)objptrToPointer(s->wsQueueTop, NULL);
+    potentialLocalScope = UNPACK_IDX(topval);
+  }
 
   size_t budget = 4 * thread->bytesAllocatedSinceLastCollection;
 
