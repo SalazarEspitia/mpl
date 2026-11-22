@@ -1214,7 +1214,7 @@ void CC_collectWithRoots(
   /** This is safe (no race with any zips), because `targetHH` is split off
     * from the main spine of the program.
     */
-  HM_HH_freeAllDependants(s, targetHH, TRUE);
+  HM_HH_freeAllDependants(s, targetHH);
 
   HM_assertChunkListInvariants(origList);
 
