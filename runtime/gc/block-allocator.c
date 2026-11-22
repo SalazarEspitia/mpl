@@ -738,6 +738,56 @@ void queryCurrentBlockUsage(
 }
 
 
+/* Each allocator's allocations and frees are counted by its own processor
+ * only (frees by others are queued, and counted when the owner takes them
+ * back), and only grow. They're summed over purposes before subtracting,
+ * because a block can be freed under another purpose than it was allocated
+ * with (HM_freeChunk passes BLOCK_FOR_UNKNOWN_PURPOSE). The frees are read
+ * first; an allocator whose reads still come out with more frees than
+ * allocations, as they can if the owner's stores are seen out of order,
+ * counts as 0. */
+size_t queryBlocksInUse(GC_state s) {
+  size_t inUse = 0;
+
+  for (uint32_t i = 0; i < s->numberOfProcs; i++) {
+    BlockAllocator ball = s->procStates[i].blockAllocatorLocal;
+    size_t freed = 0;
+    size_t allocated = 0;
+    for (enum BlockPurpose p = 0; p < NUM_BLOCK_PURPOSES; p++)
+      freed += __atomic_load_n(&(ball->numBlocksFreed[p]), __ATOMIC_ACQUIRE);
+    for (enum BlockPurpose p = 0; p < NUM_BLOCK_PURPOSES; p++)
+      allocated += __atomic_load_n(&(ball->numBlocksAllocated[p]), __ATOMIC_RELAXED);
+    if (allocated > freed)
+      inUse += allocated - freed;
+  }
+
+  GlobalBlockAllocator global = s->blockAllocatorGlobal;
+  size_t freed = 0;
+  size_t allocated = 0;
+  for (enum BlockPurpose p = 0; p < NUM_BLOCK_PURPOSES; p++)
+    freed += atomic_load_explicit(&(global->numBlocksFreed[p]), memory_order_acquire);
+  for (enum BlockPurpose p = 0; p < NUM_BLOCK_PURPOSES; p++)
+    allocated += atomic_load_explicit(&(global->numBlocksAllocated[p]), memory_order_relaxed);
+  if (allocated > freed)
+    inUse += allocated - freed;
+
+  return inUse;
+}
+
+
+size_t queryBlocksMapped(GC_state s) {
+  size_t mapped = 0;
+  for (uint32_t i = 0; i < s->numberOfProcs; i++) {
+    BlockAllocator ball = s->procStates[i].blockAllocatorLocal;
+    mapped += __atomic_load_n(&(ball->numBlocksMapped), __ATOMIC_RELAXED);
+  }
+  GlobalBlockAllocator global = s->blockAllocatorGlobal;
+  size_t released = atomic_load_explicit(&(global->numBlocksReleased), memory_order_acquire);
+  mapped += atomic_load_explicit(&(global->numBlocksMapped), memory_order_relaxed);
+  return (mapped > released) ? mapped - released : 0;
+}
+
+
 void logCurrentBlockUsage(
   GC_state s, 
   struct timespec *now, 

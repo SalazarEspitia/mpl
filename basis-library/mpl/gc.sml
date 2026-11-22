@@ -31,6 +31,12 @@ struct
     fun getCCBytesReclaimedOfProc p =
       GC.getCCBytesReclaimedOfProc (gcState (), Word32.fromInt p)
 
+    fun currentHeapSize () =
+      C_UIntmax.toLargeInt (GC.currentHeapSize (gcState ()))
+
+    fun currentHeapMapped () =
+      C_UIntmax.toLargeInt (GC.currentHeapMapped (gcState ()))
+
     fun bytesInScopeForLocal () =
       C_UIntmax.toLargeInt (GC.bytesInScopeForLocal (gcState ()))
 
@@ -77,9 +83,6 @@ struct
       ()
 
   fun millisecondsToTime ms = Time.fromMilliseconds (C_UIntmax.toLargeInt ms)
-
-  fun currentHeapSize () =
-    raise NotYetImplemented "MPL.GC.currentHeapSize"
 
   fun bytesAllocatedOfProc p =
     ( checkProcNum p
