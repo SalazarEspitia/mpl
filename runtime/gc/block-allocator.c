@@ -551,8 +551,10 @@ static MegaBlock mmapNewMegaBlock(GC_state s, size_t numBlocks, enum BlockPurpos
 }
 
 
+/* The live-block counter counts the blocks granted, which can be more than
+ * those requested (a size class's power of two, or a larger megablock);
+ * freeBlocks subtracts the granted count. */
 Blocks allocateBlocksWithPurpose(GC_state s, size_t numBlocks, enum BlockPurpose purpose) {
-  Trace1(EVENT_LIVE_BLOCK_COUNTER, incLiveBlocks(numBlocks));
   BlockAllocator local = s->blockAllocatorLocal;
   assertBlockAllocatorOkay(s, local);
 
@@ -578,6 +580,7 @@ Blocks allocateBlocksWithPurpose(GC_state s, size_t numBlocks, enum BlockPurpose
     bs->container = NULL;
     bs->numBlocks = actualNumBlocks;
     bs->purpose = purpose;
+    Trace1(EVENT_LIVE_BLOCK_COUNTER, incLiveBlocks(bs->numBlocks));
     return bs;
   }
 
@@ -589,6 +592,7 @@ Blocks allocateBlocksWithPurpose(GC_state s, size_t numBlocks, enum BlockPurpose
   if (result != NULL) {
     assertBlockAllocatorOkay(s, local);
     assert( result->purpose == purpose );
+    Trace1(EVENT_LIVE_BLOCK_COUNTER, incLiveBlocks(result->numBlocks));
     return result;
   }
 
@@ -602,6 +606,7 @@ Blocks allocateBlocksWithPurpose(GC_state s, size_t numBlocks, enum BlockPurpose
 
   assertBlockAllocatorOkay(s, local);
   assert( result->purpose == purpose );
+  Trace1(EVENT_LIVE_BLOCK_COUNTER, incLiveBlocks(result->numBlocks));
   return result;
 }
 
