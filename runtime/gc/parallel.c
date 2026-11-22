@@ -4,6 +4,12 @@
 
 void Parallel_init (GC_state s) {
   if (!Proc_isInitialized (s)) {
+    /* From here on, depth 0 is not collected (HM_HH_canCollectRootHeap).
+     * What the last collection of the root heap kept stays there, so it
+     * should not set the threshold of this thread's later collections,
+     * which collect deeper heaps only. */
+    getThreadCurrent(s)->bytesSurvivedLastCollection = 0;
+
     /* Now wake them up! */
     Proc_signalInitialization (s);
   }
