@@ -173,18 +173,16 @@ void HM_HH_clearSuspectsAtDepth(
 /** Very fancy (constant-space) loop that frees each dependant union-find
   * node of hh. Specifically, calls this on each dependant ufnode:
   *
-  *   freeFixedSize(getUFAllocator(s), ufnode)
-  *
-  * Or, if specified to retire instead:
-  *
   *   HH_EBR_retire(s, ufnode);
+  *
+  * so that EBR frees the ufnode and its heap record (ufnode->payload) once
+  * no processor can still be reading them.
   *
   * Note that this does NOT free hh, or its corresponding ufnode.
   */
 void HM_HH_freeAllDependants(
   GC_state s,
-  HM_HierarchicalHeap hh,
-  bool retireInsteadOfFree);
+  HM_HierarchicalHeap hh);
 
 
 #endif /* MLTON_GC_INTERNAL_FUNCS */

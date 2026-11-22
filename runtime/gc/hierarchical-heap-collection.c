@@ -746,7 +746,7 @@ void HM_HHC_collectLocal(GC_state s, uint32_t desiredScope)
       chunk = next;
     }
     HM_initChunkList(level);
-    HM_HH_freeAllDependants(s, hhTail, TRUE);
+    HM_HH_freeAllDependants(s, hhTail);
     // freeFixedSize(getUFAllocator(s), HM_HH_getUFNode(hhTail));
     // freeFixedSize(getHHAllocator(s), hhTail);
 

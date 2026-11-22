@@ -1425,11 +1425,9 @@ void HM_HH_rememberAtLevel(GC_state s, HM_HierarchicalHeap hh, HM_remembered rem
 
 void HM_HH_freeAllDependants(
   GC_state s,
-  HM_HierarchicalHeap hh,
-  bool retireInsteadOfFree)
+  HM_HierarchicalHeap hh)
 {
   assert(HM_HH_isLevelHead(hh));
-  FixedSizeAllocator myUFAllocator = getUFAllocator(s);
 
   HM_UnionFindNode parent = HM_HH_getUFNode(hh);
   HM_UnionFindNode child = parent->dependant1;
@@ -1479,11 +1477,7 @@ void HM_HH_freeAllDependants(
         // free and jump to other grandchild
         HM_UnionFindNode grandchild = child->dependant2;
 
-        if (retireInsteadOfFree) {
-          HH_EBR_retire(s, child);
-        } else {
-          freeFixedSize(myUFAllocator, child);
-        }
+        HH_EBR_retire(s, child);
         numFreed++;
 
         child = grandchild;
