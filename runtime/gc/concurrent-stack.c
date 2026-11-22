@@ -191,8 +191,11 @@ bool CC_stack_try_close(CC_stack* stack, HM_chunkList removed) {
   }
 
   /** We checked that all are empty; now just have to confirm and close. This
-    * works by taking all the locks, verying that each is empty, and closing
-    * it. If any has been extended in the meantime, we have to abort.
+    * works by taking all the locks and verifying that each bag is empty; only
+    * then are the bags closed, all at once, while we hold every lock. If any
+    * has been extended in the meantime, we have to abort, leaving every bag
+    * open: CC_addToStack drops a refused push, so no push may be refused
+    * while the collector can still be marking.
     */
   if (allEmpty) {
     size_t i;
@@ -201,11 +204,13 @@ bool CC_stack_try_close(CC_stack* stack, HM_chunkList removed) {
       HM_chunkList thisBag = &(stack->stacks[i].storage);
       if (NULL != thisBag->firstChunk)
         break;
-      stack->stacks[i].isClosed = TRUE;
     }
 
     if (i == stack->numStacks) {
-      // success! unlock everything and return.
+      // success! close everything, unlock, and return.
+      for (size_t j = 0; j < i; j++) {
+        stack->stacks[j].isClosed = TRUE;
+      }
       stack->allClosed = TRUE;
       for (size_t j = 0; j < i; j++) {
         pthread_mutex_unlock(&(stack->stacks[j].mutex));
