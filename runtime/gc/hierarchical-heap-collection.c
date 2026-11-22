@@ -380,7 +380,8 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
   }
 
   /* =====================================================================
-   * logging */
+   * logging, and the statistics' bytes in scope: only the depths this
+   * collection covers count as in scope, although the log shows all */
   size_t sizesBefore[maxDepth + 1];
   for (uint32_t i = 0; i <= maxDepth; i++)
     sizesBefore[i] = 0;
@@ -396,7 +397,8 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
     uint32_t d = HM_HH_getDepth(cursor);
     size_t sz = HM_getChunkListUsedSize(HM_HH_getChunkList(cursor));
     sizesBefore[d] = sz;
-    totalSizeBefore += sz;
+    if (d >= forwardHHObjptrArgs.minDepth)
+      totalSizeBefore += sz;
   }
 
   /* ===================================================================== */
@@ -945,7 +947,8 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
 
     HM_chunkList lev = HM_HH_getChunkList(cursor);
     size_t sizeAfter = HM_getChunkListUsedSize(lev);
-    totalSizeAfter += sizeAfter;
+    if (i >= forwardHHObjptrArgs.minDepth)
+      totalSizeAfter += sizeAfter;
 
 #if ASSERT
     HM_assertChunkListInvariants(lev);
