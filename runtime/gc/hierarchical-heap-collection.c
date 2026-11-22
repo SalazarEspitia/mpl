@@ -1154,6 +1154,36 @@ objptr relocateObject(
 }
 
 /* ========================================================================= */
+
+/* Is op pinned, but in a chunk this collection is about to free?
+ *
+ * A pinned object in scope survives the collection only if the collection
+ * reaches it, through a remembered-set entry or from the roots: its chunk is
+ * then moved to args->pinned[d] and marked pinnedDuringCollection. Every other
+ * chunk of the from-space is freed. An object can keep its pin bits without
+ * being reached: a CC drops the remembered-set entry of a PIN_ANY object whose
+ * unpin depth is at least its depth, without unpinning it (see the comment in
+ * forwardHHObjptr), and make_entangled pins objects reached through an
+ * immutable object without adding an entry.
+ */
+static bool isPinnedInFreedChunk(objptr op, struct ForwardHHObjptrArgs *args)
+{
+  /* Read the chunk's metadata only if the block is still a chunk. A suspect
+   * entry can outlive its chunk: a freed chunk's magic no longer matches, and
+   * its levelHead holds the free list's link. Such an entry is left as
+   * before. */
+  HM_chunk chunk = (HM_chunk)blockOf(objptrToPointer(op, NULL));
+  if (CHUNK_MAGIC != chunk->magic
+      || chunk->pinnedDuringCollection
+      || NULL == chunk->levelHead)
+    return FALSE;
+  HM_HierarchicalHeap hh = HM_getLevelHead(chunk);
+  uint32_t depth = HM_HH_getDepth(hh);
+  return depth >= args->minDepth
+      && depth <= args->maxDepth
+      && args->fromSpace[depth] == hh;
+}
+
 void copySuspect(
   GC_state s,
   __attribute__((unused)) objptr *opp,
@@ -1168,10 +1198,11 @@ void copySuspect(
   {
     new_ptr = getFwdPtr(p);
   }
-  else if (!isPinned(op))
+  else if (!isPinned(op) || isPinnedInFreedChunk(op, args))
   {
-    /* the suspect does not have a fwd-ptr and is not pinned
-     * ==> its garbage, so skip it
+    /* the suspect does not have a fwd-ptr, and is either not pinned or pinned
+     * in a chunk this collection frees ==> its garbage, so skip it. (Keeping
+     * the entry would leave it pointing into a freed chunk.)
      */
     return;
   }
