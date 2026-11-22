@@ -109,6 +109,10 @@ uintmax_t GC_currentHeapSize(GC_state s) {
   return (uintmax_t)queryBlocksInUse(s) * (uintmax_t)s->controls->blockSize;
 }
 
+uintmax_t GC_maxHeapSize(GC_state s) {
+  return (uintmax_t)queryMaxBlocksInUse(s) * (uintmax_t)s->controls->blockSize;
+}
+
 uintmax_t GC_currentHeapMapped(GC_state s) {
   return (uintmax_t)queryBlocksMapped(s) * (uintmax_t)s->controls->blockSize;
 }
