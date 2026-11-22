@@ -96,15 +96,6 @@ uint32_t GC_getHeartbeatRelayerThreshold(GC_state s) {
   return (uint32_t)s->controls->heartbeatRelayerThreshold;
 }
 
-// SAM_NOTE: TODO: remove this and replace with blocks statistics
-size_t GC_getMaxChunkPoolOccupancy (void) {
-  return 0;
-}
-
-size_t GC_getGlobalCumulativeStatisticsMaxHeapOccupancy (GC_state s) {
-  return s->globalCumulativeStatistics->maxHeapOccupancy;
-}
-
 uintmax_t GC_currentHeapSize(GC_state s) {
   return (uintmax_t)queryBlocksInUse(s) * (uintmax_t)s->controls->blockSize;
 }
@@ -146,16 +137,6 @@ uintmax_t GC_getCumulativeStatisticsBytesAllocated (GC_state s) {
   size_t retVal = 0;
   for (size_t i = 0; i < s->numberOfProcs; i++) {
     retVal += s->procStates[i].cumulativeStatistics->bytesAllocated;
-  }
-
-  return retVal;
-}
-
-uintmax_t GC_getCumulativeStatisticsBytesPromoted (GC_state s) {
-  /* sum over all procs */
-  uintmax_t retVal = 0;
-  for (uint32_t p = 0; p < s->numberOfProcs; p++) {
-    retVal += s->procStates[p].cumulativeStatistics->bytesPromoted;
   }
 
   return retVal;
