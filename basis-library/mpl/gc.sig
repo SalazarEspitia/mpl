@@ -14,6 +14,12 @@ sig
    *)
   val currentHeapSize: unit -> IntInf.int
 
+  (* The most currentHeapSize has been so far. To keep the cost off
+   * allocation, each processor reports its changes in batches of 32 blocks,
+   * so this can be off either way by up to 31 blocks per processor.
+   *)
+  val maxHeapSize: unit -> IntInf.int
+
   (* The memory the block allocator has mapped from the system and not
    * released, in bytes; at least currentHeapSize. Mapped memory is reused,
    * and not released while the program runs (except very large blocks), so

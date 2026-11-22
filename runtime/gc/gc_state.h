@@ -142,6 +142,7 @@ PRIVATE void GC_setHashConsDuringGC (GC_state s, Bool_t b);
 PRIVATE size_t GC_getLastMajorStatisticsBytesLive (GC_state s);
 
 PRIVATE uintmax_t GC_currentHeapSize(GC_state s);
+PRIVATE uintmax_t GC_maxHeapSize(GC_state s);
 PRIVATE uintmax_t GC_currentHeapMapped(GC_state s);
 
 PRIVATE uintmax_t GC_getCumulativeStatisticsBytesAllocatedOfProc(GC_state s, uint32_t proc);

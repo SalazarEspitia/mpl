@@ -28,6 +28,38 @@ static inline size_t SUPERBLOCK_SIZE(GC_state s) {
   return (1 << s->controls->superblockThreshold);
 }
 
+/* Keeping a peak needs a count of blocks in use that all processors
+ * update. To keep the shared atomic off the allocation path, each
+ * processor's allocator counts its own changes and adds them to the
+ * shared count once they reach BLOCKS_IN_USE_BATCH blocks either way. */
+static void addBlocksInUse(GC_state s, long delta) {
+  GlobalBlockAllocator global = s->blockAllocatorGlobal;
+  size_t now =
+    atomic_fetch_add_explicit(&(global->numBlocksInUse), (size_t)delta,
+                              memory_order_relaxed)
+    + (size_t)delta;
+  if (delta <= 0)
+    return;
+  size_t max = atomic_load_explicit(&(global->maxBlocksInUse), memory_order_relaxed);
+  while (now > max
+         && !atomic_compare_exchange_weak_explicit(&(global->maxBlocksInUse),
+                                                   &max, now,
+                                                   memory_order_relaxed,
+                                                   memory_order_relaxed))
+  {}
+}
+
+static inline void noteBlocksInUse(GC_state s, BlockAllocator ball, long delta) {
+  ball->unpublishedBlocks += delta;
+  if (ball->unpublishedBlocks >= BLOCKS_IN_USE_BATCH ||
+      ball->unpublishedBlocks <= -BLOCKS_IN_USE_BATCH)
+  {
+    long d = ball->unpublishedBlocks;
+    ball->unpublishedBlocks = 0;
+    addBlocksInUse(s, d);
+  }
+}
+
 static enum FullnessGroup fullness(GC_state s, SuperBlock sb) {
   size_t free = sb->numBlocksFree;
 
@@ -310,6 +342,7 @@ static Blocks allocateInSuperBlock(
     sb->numBlocksFree -= (1 << sb->sizeClass);
     assert(sb->owner != NULL);
     sb->owner->numBlocksAllocated[purpose] += (1 << sb->sizeClass);
+    noteBlocksInUse(s, sb->owner, (long)1 << sb->sizeClass);
 
     result->container = sb;
     result->numBlocks = 1 << sb->sizeClass;
@@ -325,6 +358,7 @@ static Blocks allocateInSuperBlock(
 
   assert(sb->owner != NULL);
   sb->owner->numBlocksAllocated[purpose] += (1 << sb->sizeClass);
+  noteBlocksInUse(s, sb->owner, (long)1 << sb->sizeClass);
 
   Blocks bs = (Blocks)result;
   bs->container = sb;
@@ -336,7 +370,7 @@ static Blocks allocateInSuperBlock(
 
 
 static void deallocateInSuperBlock(
-  ARG_USED_FOR_ASSERT GC_state s,
+  GC_state s,
   SuperBlock sb,
   FreeBlock block,
   ARG_USED_FOR_ASSERT int sizeClass)
@@ -354,6 +388,7 @@ static void deallocateInSuperBlock(
 
   assert(sb->owner != NULL);
   sb->owner->numBlocksFreed[purpose] += (1 << sb->sizeClass);
+  noteBlocksInUse(s, sb->owner, -((long)1 << sb->sizeClass));
 }
 
 
@@ -457,6 +492,7 @@ static void freeMegaBlock(GC_state s, MegaBlock mb, size_t sizeClass) {
       
     atomic_fetch_add_explicit(&(global->numBlocksFreed[purpose]), nb, memory_order_relaxed);
     atomic_fetch_add_explicit(&(global->numBlocksReleased), nb, memory_order_relaxed);
+    addBlocksInUse(s, -(long)nb);
     return;
   }
 
@@ -468,6 +504,7 @@ static void freeMegaBlock(GC_state s, MegaBlock mb, size_t sizeClass) {
   pthread_mutex_unlock(&(global->megaBlockLock));
 
   atomic_fetch_add_explicit(&(global->numBlocksFreed[purpose]), nb, memory_order_relaxed);
+  addBlocksInUse(s, -(long)nb);
   return;
 }
 
@@ -507,6 +544,7 @@ static MegaBlock tryFindMegaBlock(
         pthread_mutex_unlock(&(global->megaBlockLock));
 
         atomic_fetch_add_explicit(&(global->numBlocksAllocated[purpose]), mb->numBlocks, memory_order_relaxed);
+        addBlocksInUse(s, (long)mb->numBlocks);
 
         LOG(LM_CHUNK_POOL, LL_INFO,
           "inspected %zu, satisfied large alloc of %zu blocks using megablock of %zu",
@@ -537,6 +575,7 @@ static MegaBlock mmapNewMegaBlock(GC_state s, size_t numBlocks, enum BlockPurpos
   GlobalBlockAllocator global = s->blockAllocatorGlobal;
   atomic_fetch_add_explicit(&(global->numBlocksMapped), numBlocks, memory_order_relaxed);
   atomic_fetch_add_explicit(&(global->numBlocksAllocated[purpose]), numBlocks, memory_order_relaxed);
+  addBlocksInUse(s, (long)numBlocks);
 
   MegaBlock mb = (MegaBlock)start;
   mb->numBlocks = numBlocks;
@@ -772,6 +811,12 @@ size_t queryBlocksInUse(GC_state s) {
     inUse += allocated - freed;
 
   return inUse;
+}
+
+
+size_t queryMaxBlocksInUse(GC_state s) {
+  return atomic_load_explicit(&(s->blockAllocatorGlobal->maxBlocksInUse),
+                              memory_order_relaxed);
 }
 
 

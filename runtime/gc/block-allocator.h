@@ -17,6 +17,10 @@
 
 #if (defined (MLTON_GC_INTERNAL_TYPES))
 
+/** How many blocks a processor's allocator may allocate or free before it
+  * adds them to the shared count of blocks in use. */
+#define BLOCKS_IN_USE_BATCH 32
+
 enum BlockPurpose {
   BLOCK_FOR_HEAP_CHUNK,
   BLOCK_FOR_REMEMBERED_SET,
@@ -151,6 +155,11 @@ typedef struct BlockAllocator {
   size_t numBlocksAllocated[NUM_BLOCK_PURPOSES];
   size_t numBlocksFreed[NUM_BLOCK_PURPOSES];
 
+  /** Blocks allocated minus blocks freed here since this allocator last
+    * added its count to the global allocator's numBlocksInUse, which it does
+    * once this reaches BLOCKS_IN_USE_BATCH either way. */
+  long unpublishedBlocks;
+
   /** There are 3 fullness groups in each size class:
     *   0 is completely full, i.e. no free blocks available
     *   1 is nearly full, i.e. at least 1-emptinessFraction in use
@@ -167,6 +176,14 @@ typedef struct GlobalBlockAllocator {
   atomic_size_t numBlocksReleased;
   atomic_size_t numBlocksAllocated[NUM_BLOCK_PURPOSES];
   atomic_size_t numBlocksFreed[NUM_BLOCK_PURPOSES];
+
+  /** Blocks in use, as the processors have reported them in batches (see
+    * unpublishedBlocks), plus megablocks, which are counted exactly. Within
+    * numberOfProcs * (BLOCKS_IN_USE_BATCH - 1) blocks of the true count.
+    * maxBlocksInUse is the most it has been, within the same bound of the
+    * true peak. */
+  atomic_size_t numBlocksInUse;
+  atomic_size_t maxBlocksInUse;
 
   SubBlocks shared;
 
@@ -233,6 +250,10 @@ size_t queryBlocksInUse(GC_state s);
 /** The number of blocks mapped from the system and not yet released, not
   * counting each superblock's header block. */
 size_t queryBlocksMapped(GC_state s);
+
+/** The most blocks in use so far, within
+  * numberOfProcs * (BLOCKS_IN_USE_BATCH - 1) blocks. */
+size_t queryMaxBlocksInUse(GC_state s);
 
 Sampler newBlockUsageSampler(GC_state s);
 
