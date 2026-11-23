@@ -62,6 +62,19 @@ void GC_HH_setDepth(GC_state s, pointer threadp, Word32 depth) {
   GC_thread thread = threadObjptrToStruct(s, pointerToObjptr(threadp, NULL));
 
   assert(thread != NULL);
+  /* The scheduler's boot moves the original thread, whose heap is at depth 0,
+   * to depth 1 before Parallel_init. Until Parallel_init returns, a signal
+   * handler's thread is still at depth 0 and could collect its own root heap,
+   * which wouldn't trace the original thread's depth-1 objects. So root-heap
+   * collections end here. After the boot the flag is set, and this costs one
+   * load. */
+  if (!HM_HH_rootHeapCollectionsEnded()
+      && depth > 0
+      && NULL != thread->hierarchicalHeap
+      && 0 == HM_HH_getDepth(thread->hierarchicalHeap))
+  {
+    HM_HH_endRootHeapCollections();
+  }
   thread->currentDepth = depth;
   // printf("%s %d\n", "setting thread depth to ", depth);
   // printf("%s %d\n", "HH depth = ", thread->hierarchicalHeap->depth);
