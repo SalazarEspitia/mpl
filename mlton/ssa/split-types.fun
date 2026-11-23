@@ -350,7 +350,16 @@ fun transform (program as Program.T {datatypes, globals, functions, main}) =
          let
             val newTy =
                case varopt of
-                    NONE => ty
+                    NONE =>
+                       (* A CAS whose result is unused keeps its statement, for its
+                        * side effect, but has no variable to carry the result's new
+                        * type. The result has the type of the contents. *)
+                       (case exp of
+                           Exp.PrimApp {prim = Prim.Ref_cas _, args, ...} =>
+                              Type.deRef (getTy (value (Vector.sub (args, 0))))
+                         | Exp.PrimApp {prim = Prim.Array_cas _, args, ...} =>
+                              Type.deArray (getTy (value (Vector.sub (args, 0))))
+                         | _ => ty)
                   | SOME var => getTy (value var)
             val newExp = loopExp (exp, newTy)
          in
