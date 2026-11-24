@@ -164,6 +164,8 @@ GC_thread newThreadWithHeap(
    * Can't just use HM_HH_extend, because the corresponding thread doesn't exist
    * yet. */
   HM_HierarchicalHeap hh = HM_HH_new(s, depth);
+  if (0 == depth)
+    HM_HH_notePreBootRootHeap(s, hh);
 
   HM_chunk tChunk = HM_allocateChunkWithPurpose(
     HM_HH_getChunkList(hh),

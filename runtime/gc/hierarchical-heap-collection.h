@@ -52,18 +52,9 @@ struct ForwardHHObjptrArgs
   struct CC_workList worklist;
   bool concurrent;
 
-  /* Only in a collection of a root heap (minDepth == 0, before the
-   * scheduler boots; NULL otherwise): the other depth-0 heaps that the
-   * collection has reached. They are scanned in place, not collected. */
-  struct HM_HHC_otherRootHeaps *otherRootHeaps;
-};
-
-struct HM_HHC_otherRootHeaps
-{
-  HM_HierarchicalHeap *heaps;
-  size_t length;
-  size_t capacity;
-  size_t scanned; /* heaps[0, scanned) have been scanned */
+  /* a collection of the main root heap (minDepth == 0, before the
+   * scheduler boots; see HM_HHC_collectLocal) */
+  bool rootHeap;
 };
 
 struct checkDEDepthsArgs

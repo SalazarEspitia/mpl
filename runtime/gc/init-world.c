@@ -157,6 +157,7 @@ GC_thread initThreadAndHeap(GC_state s, uint32_t depth) {
 void initWorld(GC_state s) {
   GC_thread thread = initThreadAndHeap(s, 0);
   struct HM_HierarchicalHeap *hh = thread->hierarchicalHeap;
+  HM_HH_setMainRootHeap(hh);
   /* newThreadWithHeap has already counted the initial thread and stack. */
   size_t usedBefore = HM_getChunkListUsedSize(HM_HH_getChunkList(hh));
 

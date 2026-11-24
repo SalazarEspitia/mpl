@@ -1339,19 +1339,78 @@ bool HM_HH_beforeBoot(GC_state s) {
   return !rootHeapCollectionsEnded && !Proc_isInitialized(s);
 }
 
+/* The depth-0 heaps made before the boot, one per thread made with a heap of
+ * its own (newThreadWithHeap at depth 0): the main heap, made by initWorld
+ * for the original thread, which holds the program's data; and the heaps of
+ * the other processors' initial threads and of the threads made by
+ * Thread.copy (signal handler threads, the C-call handler threads and their
+ * workers). Code that runs in those other heaps runs in the main heap's
+ * thread's heap instead (a signal handler and, before the boot, a callback:
+ * GC_handlerEnterHeapOfThread, GC_callbackEnterHeapOfThread), so they hold
+ * their thread and stack and the basis's few objects for handling calls from
+ * C. A collection of the main heap scans them in place, whole, as roots (see
+ * HM_HHC_collectLocal). Only the main heap is collected, so none of these
+ * is. Before the boot only one processor runs SML code, so no lock. */
+static HM_HierarchicalHeap mainRootHeap = NULL;
+static HM_HierarchicalHeap *preBootRootHeaps = NULL;
+static size_t numPreBootRootHeaps = 0;
+static size_t capPreBootRootHeaps = 0;
+
+void HM_HH_setMainRootHeap(HM_HierarchicalHeap hh) {
+  assert(NULL == mainRootHeap);
+  assert(0 == HM_HH_getDepth(hh));
+  mainRootHeap = hh;
+}
+
+void HM_HH_notePreBootRootHeap(GC_state s, HM_HierarchicalHeap hh) {
+  assert(0 == HM_HH_getDepth(hh));
+  if (!HM_HH_beforeBoot(s))
+    return;
+  if (numPreBootRootHeaps == capPreBootRootHeaps) {
+    size_t newCap = (0 == capPreBootRootHeaps) ? 16 : 2 * capPreBootRootHeaps;
+    HM_HierarchicalHeap *newHeaps =
+      malloc_safe(newCap * sizeof(HM_HierarchicalHeap));
+    if (numPreBootRootHeaps > 0)
+      memcpy(newHeaps, preBootRootHeaps,
+             numPreBootRootHeaps * sizeof(HM_HierarchicalHeap));
+    free(preBootRootHeaps);
+    preBootRootHeaps = newHeaps;
+    capPreBootRootHeaps = newCap;
+  }
+  preBootRootHeaps[numPreBootRootHeaps++] = hh;
+}
+
+size_t HM_HH_numPreBootRootHeaps(void) {
+  return numPreBootRootHeaps;
+}
+
+HM_HierarchicalHeap HM_HH_preBootRootHeap(size_t i) {
+  assert(i < numPreBootRootHeaps);
+  return preBootRootHeaps[i];
+}
+
+bool HM_HH_isPreBootRootHeap(HM_HierarchicalHeap hh) {
+  for (size_t i = 0; i < numPreBootRootHeaps; i++) {
+    if (preBootRootHeaps[i] == hh)
+      return TRUE;
+  }
+  return FALSE;
+}
+
 /* Before a scheduler boots, this processor is the only one running SML
  * code: the others wait in Proc_waitForInitialization until
  * MLton.Parallel.initializeProcessors (Parallel_init), and no deque is
  * registered yet. A program that never loads the scheduler stays in this
- * state. The thread's root heap can then be collected like a leaf heap,
- * with the full root set (see HM_HHC_collectLocal). Once the boot has moved
+ * state. The main root heap can then be collected like a leaf heap, with the
+ * full root set (see HM_HHC_collectLocal), by the thread that runs in it: the
+ * original thread, or a signal handler or callback that runs in its heap. Once the boot has moved
  * the original thread to depth 1, and so once Parallel_init has run, depth 0
  * is never collected, as before. */
 bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread) {
   return s->wsQueueTop == BOGUS_OBJPTR
          && HM_HH_beforeBoot(s)
          && 0 == thread->currentDepth
-         && 0 == HM_HH_getDepth(thread->hierarchicalHeap);
+         && thread->hierarchicalHeap == mainRootHeap;
 }
 
 uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread)
