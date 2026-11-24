@@ -442,7 +442,13 @@ in
          type worker = Prim.thread * Prim.thread option ref
          type worker_arg = worker
 
-         val workerCache: worker option array = Array.array (numProcs, NONE)
+         (* Idle workers, per processor, most recently used first. Nested
+          * calls (C -> ML -> C -> ML) take a worker each, and each puts
+          * itself back when its call returns, so a processor never has more
+          * workers than its deepest nesting. (A single slot here lost the
+          * inner worker whenever the outer one returned: a new worker, with
+          * its own heap, for every outer call that called C again.) *)
+         val workerCache: worker list array = Array.array (numProcs, [])
          val workerArgs: worker_arg option array = Array.array (numProcs, NONE)
 
          fun workerLoop (thisWorker as (_, savedRef): worker): unit =
@@ -474,7 +480,8 @@ in
                val _ = atomicBegin ()
                (* Atomic 1 *)
                val proc = procNum ()
-               val _ = Array.update (workerCache, proc, SOME thisWorker)
+               val _ = Array.update (workerCache, proc,
+                                     thisWorker :: Array.sub (workerCache, proc))
                val _ = Prim.setSaved (gcState (), valOf (!savedRef))
                val _ = savedRef := NONE
                val _ = Prim.callbackLeaveHeapOfThread (gcState (), caller, oldHH)
@@ -528,15 +535,15 @@ in
                 * resumes in workerLoop), so only a new one gets it. *)
                val (workerThread, savedRef) =
                   case Array.sub (workerCache, proc) of
-                     NONE =>   (** NOTE: only for nested C -> ML -> C -> *)
+                     [] =>   (** NOTE: only for nested C -> ML -> C -> *)
                         let
                            val worker = mkWorker ()
                         in
                            Array.update (workerArgs, proc, SOME worker)
                            ; worker
                         end
-                   | SOME worker =>
-                        (Array.update (workerCache, proc, NONE)
+                   | worker :: rest =>
+                        (Array.update (workerCache, proc, rest)
                          ; worker)
                val _ = refAssignNoBarrier (savedRef, SOME saved)
                val _ = Prim.switchTo (workerThread) (* implicit atomicEnd() *)
