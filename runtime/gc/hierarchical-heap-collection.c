@@ -327,11 +327,6 @@ void HM_HHC_collectLocal(GC_state s, uint32_t desiredScope)
     minDepth = maxDepth;
   }
 
-  /* Before the boot nothing remembers at depth 0: the write barrier makes
-   * no pin between depth-0 heaps then, and nothing else runs (no CC, no
-   * entanglement). */
-  assert(!rootHeap || 0 == HM_numRemembered(HM_HH_getRemSet(hh)));
-
   /* copy roots */
   struct ForwardHHObjptrArgs forwardHHObjptrArgs = {
       .hh = hh,
@@ -1101,8 +1096,10 @@ static void scanPreBootRootHeaps(GC_state s, struct ForwardHHObjptrArgs *args)
     if (other == args->hh)
       continue;
     assert(0 == HM_HH_getDepth(other));
-    /* nothing to purge: see the assertion in HM_HHC_collectLocal */
-    assert(0 == HM_numRemembered(HM_HH_getRemSet(other)));
+    /* Its remembered set may hold entries made while its thread stored one
+     * of its objects into the main heap (a new C-call worker into
+     * workerArgs, say), whose from-object has moved since. Nothing reads
+     * them: this heap is never collected, nor is depth 0 after the boot. */
     HM_chunk first = HM_getChunkListFirstChunk(HM_HH_getChunkList(other));
     if (NULL != first) {
       HM_forwardHHObjptrsInChunkList(
@@ -1634,6 +1631,21 @@ void tryUnpinOrKeepPinned(GC_state s, HM_remembered remElem, void *rawArgs)
   }
 
   assert(isPinned(op));
+
+  if (args->rootHeap) {
+    HM_HierarchicalHeap opHH =
+      HM_getLevelHead(HM_getChunkOf(objptrToPointer(op, NULL)));
+    if (opHH != args->fromSpace[0]) {
+      /* A store into this heap of an object of another depth-0 heap made
+       * before the boot (a thread, or the basis's C-call bookkeeping). That
+       * heap is never collected, so the object stays where it is: keep it
+       * pinned and keep the entry. Its from-object is forwarded with the
+       * to-space's remembered set. */
+      assert(HM_HH_isPreBootRootHeap(opHH));
+      HM_remember(s, HM_HH_getRemSet(toSpaceHH(s, args, 0)), remElem, false);
+      return;
+    }
+  }
 
   /* We could just look up the depth of `op`, with the normal technique
    * (getLevelHead, etc.), but this should be faster. The toDepth field

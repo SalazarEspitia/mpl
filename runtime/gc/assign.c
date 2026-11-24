@@ -186,17 +186,6 @@ void Assignable_writeBarrier(
         return;
       }
 
-      /* A store between two depth-0 heaps (dd <= sd here, so sd == 0 means
-       * dd == 0) before the scheduler boots: no pin, no entry. Collections
-       * of a root heap scan the other depth-0 heaps they reach in place, so
-       * they find this pointer anyway; an entry would be kept in the current
-       * thread's heap, which need not hold src, and would go stale when the
-       * heap that holds src is collected. No depth-0 heap made before the
-       * boot changes depth later, and depth 0 is not collected after it. */
-      if (0 == sd && !Proc_isInitialized(s)) {
-        return;
-      }
-
       uint32_t unpinDepth = dd;
       bool success = pinObject(s, src, unpinDepth, PIN_DOWN);
 
