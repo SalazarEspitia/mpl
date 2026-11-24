@@ -163,6 +163,10 @@ bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread);
 void HM_HH_endRootHeapCollections(void);
 bool HM_HH_rootHeapCollectionsEnded(void);
 
+/* TRUE until the scheduler's boot: until it moves the original thread off
+ * depth 0, or until Parallel_init, whichever comes first. */
+bool HM_HH_beforeBoot(GC_state s);
+
 void HM_HH_forceLeftHeap(GC_state s, uint32_t processor, pointer threadp);
 void HM_HH_forceNewChunk(GC_state s);
 pointer HM_HH_getRoot(GC_state s, pointer threadp);

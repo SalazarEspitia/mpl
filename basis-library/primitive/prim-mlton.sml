@@ -367,6 +367,8 @@ structure Thread =
 
       val handlerEnterHeapOfThread = _import "GC_handlerEnterHeapOfThread" runtime private: GCState.t * thread -> Word64.word;
       val handlerLeaveHeapOfThread = _import "GC_handlerLeaveHeapOfThread" runtime private: GCState.t * thread * Word64.word -> unit;
+      val callbackEnterHeapOfThread = _import "GC_callbackEnterHeapOfThread" runtime private: GCState.t * thread -> Word64.word;
+      val callbackLeaveHeapOfThread = _import "GC_callbackLeaveHeapOfThread" runtime private: GCState.t * thread * Word64.word -> unit;
 
       val forceLeftHeap = _import "HM_HH_forceLeftHeap" runtime private: GCState.t * Word32.word * thread -> unit;
       val forceNewChunk = _import "HM_HH_forceNewChunk" runtime private: GCState.t -> unit;

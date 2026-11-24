@@ -449,6 +449,17 @@ in
             let
                (* Atomic 1 *)
                val p = Primitive.MLton.FFI.getOpArgsResPtr (gcState ())
+               (* Before the scheduler boots, run the export in the heap of
+                * the thread that called C, which is suspended until we
+                * return to C (as a signal handler runs in the heap of the
+                * thread it interrupted), so that what the export allocates
+                * is collected with the rest of the program. So is what the
+                * bookkeeping below allocates: we leave the caller's heap
+                * just before returning to C, and allocate nothing in our own
+                * heap before entering it. After the boot this does nothing,
+                * and the export runs in this thread's own heap, as before. *)
+               val caller = valOf (!savedRef)
+               val oldHH = Prim.callbackEnterHeapOfThread (gcState (), caller)
                val _ = atomicEnd ()
                (* Atomic 0 *)
                val i = MLtonPointer.getInt32 (MLtonPointer.getPointer (p, 0), 0)
@@ -466,6 +477,7 @@ in
                val _ = Array.update (workerCache, proc, SOME thisWorker)
                val _ = Prim.setSaved (gcState (), valOf (!savedRef))
                val _ = savedRef := NONE
+               val _ = Prim.callbackLeaveHeapOfThread (gcState (), caller, oldHH)
                val _ = Prim.returnToC () (* implicit atomicEnd() *)
             in
                workerLoop thisWorker
@@ -509,14 +521,24 @@ in
                val proc = procNum ()
                (* val _ = print ("[" ^ Int.toString proc ^ "] handlerLoop\n") *)
                val saved = Prim.saved (gcState ())
-               val worker as (workerThread, savedRef) =
+               (* This thread runs in its own depth-0 heap. Before the boot
+                * a collection of the main heap scans that heap whole, so
+                * allocate in it only when making a worker, not on every
+                * call: only a new worker reads workerArgs (a cached one
+                * resumes in workerLoop), so only a new one gets it. *)
+               val (workerThread, savedRef) =
                   case Array.sub (workerCache, proc) of
-                     NONE => mkWorker ()   (** NOTE: only for nested C -> ML -> C -> *)
+                     NONE =>   (** NOTE: only for nested C -> ML -> C -> *)
+                        let
+                           val worker = mkWorker ()
+                        in
+                           Array.update (workerArgs, proc, SOME worker)
+                           ; worker
+                        end
                    | SOME worker =>
                         (Array.update (workerCache, proc, NONE)
                          ; worker)
                val _ = refAssignNoBarrier (savedRef, SOME saved)
-               val _ = Array.update (workerArgs, proc, SOME worker)
                val _ = Prim.switchTo (workerThread) (* implicit atomicEnd() *)
             in
                handlerLoop ()

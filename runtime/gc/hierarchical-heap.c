@@ -1333,6 +1333,12 @@ bool HM_HH_rootHeapCollectionsEnded(void) {
   return rootHeapCollectionsEnded;
 }
 
+/* Before the scheduler's boot: only one processor runs SML code, and depth 0
+ * can still be collected. */
+bool HM_HH_beforeBoot(GC_state s) {
+  return !rootHeapCollectionsEnded && !Proc_isInitialized(s);
+}
+
 /* Before a scheduler boots, this processor is the only one running SML
  * code: the others wait in Proc_waitForInitialization until
  * MLton.Parallel.initializeProcessors (Parallel_init), and no deque is
@@ -1343,8 +1349,7 @@ bool HM_HH_rootHeapCollectionsEnded(void) {
  * is never collected, as before. */
 bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread) {
   return s->wsQueueTop == BOGUS_OBJPTR
-         && !rootHeapCollectionsEnded
-         && !Proc_isInitialized(s)
+         && HM_HH_beforeBoot(s)
          && 0 == thread->currentDepth
          && 0 == HM_HH_getDepth(thread->hierarchicalHeap);
 }

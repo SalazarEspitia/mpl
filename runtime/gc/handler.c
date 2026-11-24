@@ -280,7 +280,12 @@ void GC_handler (int signum) {
              Proc_processorNumber (s));
 }
 
-pointer GC_handlerEnterHeapOfThread(GC_state s, objptr threadp) {
+/* The current thread (a signal handler's, or a C-call worker's) takes over
+ * the heap of threadp, which is suspended until leaveHeapOfThread gives the
+ * heap back. A signal handler also makes threadp an extra root
+ * (savedThreadDuringSignalHandler): its stack points into that heap, and
+ * nothing else need reach it. Handlers don't nest, so one slot is enough. */
+static pointer enterHeapOfThread(GC_state s, objptr threadp, bool asHandler) {
   enter(s);
 
   GC_thread target = threadObjptrToStruct(s, threadp);
@@ -327,7 +332,8 @@ pointer GC_handlerEnterHeapOfThread(GC_state s, objptr threadp) {
   s->limitPlusSlop = HM_HH_getLimit(getThreadCurrent(s));
   s->limit = s->limitPlusSlop - GC_HEAP_LIMIT_SLOP;
 
-  s->savedThreadDuringSignalHandler = threadp;
+  if (asHandler)
+    s->savedThreadDuringSignalHandler = threadp;
 
   HM_ensureHierarchicalHeapAssurances(
     s,
@@ -342,16 +348,17 @@ pointer GC_handlerEnterHeapOfThread(GC_state s, objptr threadp) {
 }
 
 
-void GC_handlerLeaveHeapOfThread(
+static void leaveHeapOfThread(
   GC_state s,
   objptr threadp,
-  pointer abandonedHH)
+  pointer abandonedHH,
+  bool asHandler)
 {
   enter(s);
 
   GC_thread target = threadObjptrToStruct(s, threadp);
   assert(target->currentProcNum == -1);
-  assert(s->savedThreadDuringSignalHandler == threadp);
+  assert(!asHandler || s->savedThreadDuringSignalHandler == threadp);
 
   target->spareHeartbeatTokens = getThreadCurrent(s)->spareHeartbeatTokens;
   target->currentDepth = getThreadCurrent(s)->currentDepth;
@@ -407,7 +414,8 @@ void GC_handlerLeaveHeapOfThread(
   s->limitPlusSlop = HM_HH_getLimit(getThreadCurrent(s));
   s->limit = s->limitPlusSlop - GC_HEAP_LIMIT_SLOP;
 
-  s->savedThreadDuringSignalHandler = BOGUS_OBJPTR;
+  if (asHandler)
+    s->savedThreadDuringSignalHandler = BOGUS_OBJPTR;
 
   HM_ensureHierarchicalHeapAssurances(
     s,
@@ -418,4 +426,43 @@ void GC_handlerLeaveHeapOfThread(
   assert(invariantForMutatorFrontier(s));
   assert(invariantForMutatorStack(s));
   leave(s);
+}
+
+pointer GC_handlerEnterHeapOfThread(GC_state s, objptr threadp) {
+  return enterHeapOfThread(s, threadp, TRUE);
+}
+
+void GC_handlerLeaveHeapOfThread(
+  GC_state s,
+  objptr threadp,
+  pointer abandonedHH)
+{
+  leaveHeapOfThread(s, threadp, abandonedHH, TRUE);
+}
+
+/* A C-call worker runs the exported function in the heap of its caller, the
+ * thread that called C, which is suspended until the callback returns.
+ * Before the scheduler boots only: then every program object stays in the
+ * main heap, and the worker's own depth-0 heap holds only its thread and
+ * stack. The caller needs no extra root then: a collection of a root heap
+ * traces from the globals and the other depth-0 heaps, which reach it (the
+ * worker's stack and its savedRef hold it). This doesn't use the signal
+ * handler's slot, so callbacks can nest (C -> ML -> C -> ML: the inner
+ * worker's caller is the outer worker, already in the main heap) and a signal
+ * handler can run during one. After the boot, a callback stays in the
+ * worker's own heap, as before; returns NULL then. */
+pointer GC_callbackEnterHeapOfThread(GC_state s, objptr threadp) {
+  if (!HM_HH_beforeBoot(s))
+    return NULL;
+  return enterHeapOfThread(s, threadp, FALSE);
+}
+
+void GC_callbackLeaveHeapOfThread(
+  GC_state s,
+  objptr threadp,
+  pointer abandonedHH)
+{
+  if (NULL == abandonedHH)
+    return;
+  leaveHeapOfThread(s, threadp, abandonedHH, FALSE);
 }
