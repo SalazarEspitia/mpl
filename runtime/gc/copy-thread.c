@@ -49,7 +49,13 @@ GC_thread copyThreadWithHeap (GC_state s, GC_thread from, size_t used) {
    */
   assert (s->savedThread == BOGUS_OBJPTR);
   s->savedThread = pointerToObjptr((pointer)from - offsetofThread (s), NULL);
-  to = newThreadWithHeap (s, alignStackReserved(s, used), 0);
+  /* Before the scheduler's boot the program has one heap, which the
+   * running thread holds (GC_switchToThread): a thread made then gets no
+   * heap of its own. */
+  if (HM_HH_beforeBoot(s))
+    to = newThreadInCurrentHeap (s, alignStackReserved(s, used));
+  else
+    to = newThreadWithHeap (s, alignStackReserved(s, used), 0);
   from = (GC_thread)(objptrToPointer(s->savedThread, NULL) + offsetofThread (s));
   s->savedThread = BOGUS_OBJPTR;
   if (DEBUG_THREADS) {

@@ -86,7 +86,14 @@ GC_stack newStack(GC_state s, size_t reserved) {
   return stack;
 }
 
-GC_thread newThread(GC_state s, size_t reserved) {
+/* A new thread with no heap of its own. Its stack goes in the current
+ * chunk, or, with stackInOwnChunk, in a chunk of its own in the current
+ * heap (newThreadInCurrentHeap). */
+static GC_thread newThreadWithStack(
+  GC_state s,
+  size_t reserved,
+  bool stackInOwnChunk)
+{
   GC_stack stack;
   GC_thread thread;
   pointer res;
@@ -97,14 +104,23 @@ GC_thread newThread(GC_state s, size_t reserved) {
   HM_ensureHierarchicalHeapAssurances(
     s,
     FALSE,
-    sizeofStackWithMetaData(s, reserved, desiredPromoStackReserved(s, reserved))
+    (stackInOwnChunk ? 0 :
+      sizeofStackWithMetaData(s, reserved, desiredPromoStackReserved(s, reserved)))
       + sizeofThread(s),
     FALSE
   );
 
   assert((pointer)HM_getChunkOf(s->frontier) == blockOf(s->frontier));
 
-  stack = newStack(s, reserved);
+  if (stackInOwnChunk) {
+    GC_thread current = getThreadCurrent(s);
+    stack = newStackInOwnChunk(s, current->hierarchicalHeap, reserved,
+                               current->currentChunk->decheckState);
+    HM_HH_addRecentBytesAllocated(current,
+      HM_getChunkSize(HM_getChunkOf((pointer)stack)));
+  } else {
+    stack = newStack(s, reserved);
+  }
   assert((pointer)HM_getChunkOf(s->frontier) == blockOf(s->frontier));
   /* SAM_NOTE: this is broken? if the stack is just the right size to force the
    * thread object to lie beyond the limit... */
@@ -141,6 +157,24 @@ GC_thread newThread(GC_state s, size_t reserved) {
       (uintptr_t)thread,
       (uintmax_t)reserved);
 
+  return thread;
+}
+
+GC_thread newThread(GC_state s, size_t reserved) {
+  return newThreadWithStack(s, reserved, FALSE);
+}
+
+/* Before the scheduler's boot (copyThreadWithHeap): a thread with no heap
+ * of its own, in the current heap, which is the program's one heap until
+ * the boot. It gets that heap from whichever thread runs when it is
+ * switched to (GC_switchToThread), or a heap of its own if it first runs
+ * after the boot (switchToThread). Its stack has a chunk of its own, so
+ * that it can grow. */
+GC_thread newThreadInCurrentHeap(GC_state s, size_t reserved) {
+  assert(HM_HH_beforeBoot(s));
+  assert(0 == getThreadCurrent(s)->currentDepth);
+  GC_thread thread = newThreadWithStack(s, reserved, TRUE);
+  thread->currentDepth = 0; /* as newThreadWithHeap(s, reserved, 0) */
   return thread;
 }
 

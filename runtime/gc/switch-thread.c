@@ -6,6 +6,52 @@
  * See the file MLton-LICENSE for details.
  */
 
+/* Move the heap that `from` runs in to `to`: the heap, the chunk to
+ * allocate in, the depth, the allocation counters and the entanglement
+ * checker's state. `from` is left with none of them. Before the scheduler's
+ * boot the program has one heap, which follows the running thread: the
+ * thread switches hand it over (GC_switchToThread, and the switch to a
+ * signal handler). A signal handler runs in the interrupted thread's heap
+ * the same way (GC_handlerEnterHeapOfThread and ...Leave...). */
+void handOverHeap(GC_thread from, GC_thread to) {
+  assert(from != to);
+  to->currentDepth = from->currentDepth;
+  to->currentChunk = from->currentChunk;
+  to->hierarchicalHeap = from->hierarchicalHeap;
+  to->bytesAllocatedSinceLastCollection =
+    from->bytesAllocatedSinceLastCollection;
+  to->bytesSurvivedLastCollection = from->bytesSurvivedLastCollection;
+#ifdef DETECT_ENTANGLEMENT
+  to->decheckState = from->decheckState;
+  memcpy(&(to->decheckSyncDepths[0]),
+         &(from->decheckSyncDepths[0]),
+         DECHECK_DEPTHS_LEN * sizeof(uint32_t));
+  from->decheckState = DECHECK_BOGUS_TID;
+#endif
+
+  from->currentChunk = NULL;
+  from->hierarchicalHeap = NULL;
+  from->bytesAllocatedSinceLastCollection = 0;
+  from->bytesSurvivedLastCollection = 0;
+}
+
+/* Before the scheduler's boot: hand the one heap from the thread that
+ * stops running to the thread that runs next, which has none. */
+void handOverHeapBeforeBoot(
+  ARG_USED_FOR_ASSERT GC_state s,
+  GC_thread from,
+  GC_thread to)
+{
+  assert(HM_HH_beforeBoot(s));
+  assert(NULL != from->hierarchicalHeap);
+  assert(0 == HM_HH_getDepth(from->hierarchicalHeap));
+  assert(0 == from->currentDepth);
+  if (from == to)
+    return;
+  assert(NULL == to->hierarchicalHeap);
+  handOverHeap(from, to);
+}
+
 /* A thread made before the scheduler's boot has no heap of its own: until
  * the boot the program has one heap, which the running thread holds (see
  * copyThreadWithHeap and GC_switchToThread). The first time such a thread
@@ -119,6 +165,10 @@ void GC_switchToThread (GC_state s, pointer p, size_t ensureBytesFree) {
   //   s->procNumber,
   //   (void*)oldCurrentThread,
   //   (void*)p);
+
+  if (HM_HH_beforeBoot(s))
+    handOverHeapBeforeBoot(s, oldCurrentThread,
+      threadObjptrToStruct(s, pointerToObjptr(p, NULL)));
 
   switchToThread(s, pointerToObjptr(p, NULL));
   /* SAM_NOTE: TODO: do signal handlers work properly? */
