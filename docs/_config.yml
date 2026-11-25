@@ -18,12 +18,12 @@
 # You can create any custom variable you would like, and they will be accessible
 # in the templates via {{ site.myvariable }}.
 
-title: MaPLe Dev Docs
+title: MaPLe Docs
 # email: your-email@example.com
 description: >- # this means to ignore newlines until "baseurl:"
-  Documentation for the MPLLang/mpl repo, especially source-code documentation
-  of the MPL compiler and run-time system. This is intended for the developers
-  of MPL and anyone interested in contributing to the MPL project. 
+  Documentation for MaPLe (MPL), a functional language for provably efficient
+  and safe multicore parallelism: how to install and use it, and how its
+  compiler and run-time system work.
 baseurl: "/mpl" # the subpath of your site, e.g. /blog
 url: "https://mpllang.github.io" # the base hostname & protocol for your site, e.g. http://example.com
 # twitter_username: jekyllrb
