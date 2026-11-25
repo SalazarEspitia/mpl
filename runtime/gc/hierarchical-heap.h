@@ -164,6 +164,10 @@ void HM_HH_noteBootStarted(void);
  * HM_HHC_collectLocal). */
 bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread);
 
+/* for assertions about the heap before the boot (see hierarchical-heap.c) */
+bool HM_HH_isOtherInitialHeap(GC_state s, HM_HierarchicalHeap hh);
+bool HM_HH_remembersNothing(HM_HierarchicalHeap hh);
+
 void HM_HH_forceLeftHeap(GC_state s, uint32_t processor, pointer threadp);
 void HM_HH_forceNewChunk(GC_state s);
 pointer HM_HH_getRoot(GC_state s, pointer threadp);

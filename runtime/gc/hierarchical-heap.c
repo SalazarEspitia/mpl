@@ -1336,6 +1336,27 @@ bool HM_HH_beforeBoot(GC_state s) {
   return !bootStarted && !Proc_isInitialized(s);
 }
 
+/* For the debug runtime's checks of the heap before the boot. The other
+ * processors' initial threads (duplicateWorld) each have a depth-0 heap of
+ * their own, which holds a fresh thread and an empty stack: TRUE if hh is
+ * one of those. */
+bool HM_HH_isOtherInitialHeap(GC_state s, HM_HierarchicalHeap hh) {
+  for (uint32_t p = 0; p < s->numberOfProcs; p++) {
+    GC_state ps = &(s->procStates[p]);
+    if (ps == s || BOGUS_OBJPTR == ps->currentThread)
+      continue;
+    if (threadObjptrToStruct(s, ps->currentThread)->hierarchicalHeap == hh)
+      return TRUE;
+  }
+  return FALSE;
+}
+
+/* TRUE if nothing is remembered in hh, privately or publicly. */
+bool HM_HH_remembersNothing(HM_HierarchicalHeap hh) {
+  return 0 == HM_numRemembered(HM_HH_getRemSet(hh))
+         && NULL == HM_HH_getRemSet(hh)->public.firstChunk;
+}
+
 /* Before the boot this processor is the only one running SML code, no
  * deque is registered, and the running thread holds the program's one heap
  * (see GC_switchToThread). That heap can then be collected like a leaf

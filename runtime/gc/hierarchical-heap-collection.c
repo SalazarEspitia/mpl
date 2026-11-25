@@ -328,7 +328,7 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
   /* Before the boot nothing remembers at depth 0: every store is within
    * this one heap, which the write barrier doesn't record, and nothing else
    * runs (no CC, no entanglement). */
-  assert(!rootHeap || 0 == HM_numRemembered(HM_HH_getRemSet(hh)));
+  assert(!rootHeap || HM_HH_remembersNothing(hh));
 
   /* copy roots */
   struct ForwardHHObjptrArgs forwardHHObjptrArgs = {
@@ -1796,6 +1796,10 @@ void forwardHHObjptr(
     /* In a collection of the root heap, before the boot: another depth-0
      * heap is one of the other processors' initial threads', which hold a
      * thread and an empty stack, and point nowhere. */
+    assert(!args->rootHeap
+           || (0 == opDepth
+               && HM_HH_isOtherInitialHeap(s,
+                    HM_getLevelHead(HM_getChunkOf(objptrToPointer(op, NULL))))));
     return;
   }
 
@@ -1869,6 +1873,15 @@ void forwardHHObjptr(
                                       &objectBytes,
                                       &copyBytes,
                                       &metaDataBytes);
+
+    /* Before the boot exactly one thread holds the heap, the running one;
+     * every other thread made then has no heap (see GC_switchToThread). */
+    assert(!args->rootHeap
+           || GC_THREAD_HEADER != getHeader(p)
+           || NULL == ((GC_thread)(p + offsetofThread(s)))->hierarchicalHeap
+           || (op == s->currentThread
+               && args->hh ==
+                    ((GC_thread)(p + offsetofThread(s)))->hierarchicalHeap));
 
     switch (tag)
     {
