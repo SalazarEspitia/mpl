@@ -159,6 +159,11 @@ uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread);
 bool HM_HH_beforeBoot(GC_state s);
 void HM_HH_noteBootStarted(void);
 
+/* TRUE before the boot, at depth 0: the running thread's heap, the
+ * program's one heap then, can be collected locally (see
+ * HM_HHC_collectLocal). */
+bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread);
+
 void HM_HH_forceLeftHeap(GC_state s, uint32_t processor, pointer threadp);
 void HM_HH_forceNewChunk(GC_state s);
 pointer HM_HH_getRoot(GC_state s, pointer threadp);

@@ -220,15 +220,31 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
   //   return;
   // }
 
-  if (s->wsQueueTop == BOGUS_OBJPTR || s->wsQueueBot == BOGUS_OBJPTR)
+  /* Before the scheduler boots, only this thread runs SML code, nothing is
+   * registered in a deque, and the program has one heap, which the running
+   * thread holds: threads made then get no heap of their own
+   * (copyThreadWithHeap, GC_switchToThread). The only other depth-0 heaps
+   * are the other processors' initial threads', which point nowhere. So the
+   * root heap can be collected like a leaf heap (HM_HH_canCollectRootHeap),
+   * with no other heap to trace. Depth 0 needs the full root set: the
+   * globals, which hold the statics copied in by initWorld, and the threads
+   * in GC_state. */
+  bool rootHeap = HM_HH_canCollectRootHeap(s, thread);
+
+  if (!rootHeap &&
+      (s->wsQueueTop == BOGUS_OBJPTR || s->wsQueueBot == BOGUS_OBJPTR))
   {
     LOG(LM_HH_COLLECTION, LL_DEBUG, "Skipping collection, deque not registered yet");
     return;
   }
 
-  uint64_t topval = *(uint64_t *)objptrToPointer(s->wsQueueTop, NULL);
-  uint32_t potentialLocalScope = UNPACK_IDX(topval);
-  uint32_t originalLocalScope = pollCurrentLocalScope(s);
+  uint32_t potentialLocalScope = 0;
+  uint32_t originalLocalScope = 0;
+  if (!rootHeap) {
+    uint64_t topval = *(uint64_t *)objptrToPointer(s->wsQueueTop, NULL);
+    potentialLocalScope = UNPACK_IDX(topval);
+    originalLocalScope = pollCurrentLocalScope(s);
+  }
 
   if (thread->currentDepth != originalLocalScope)
   {
@@ -253,17 +269,21 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
    */
   uint32_t minNoCC = minDepthWithoutCC(thread);
   uint32_t minOkay = desiredScope;
-  minOkay = max(minOkay, thread->minLocalCollectionDepth);
+  /* the scheduler's limit; before it boots, nothing has set it */
+  if (!rootHeap)
+    minOkay = max(minOkay, thread->minLocalCollectionDepth);
   minOkay = max(minOkay, minNoCC);
   uint32_t minDepth = originalLocalScope;
-  while (minDepth > minOkay && tryClaimLocalScope(s))
-  {
-    minDepth--;
+  if (!rootHeap) {
+    while (minDepth > minOkay && tryClaimLocalScope(s))
+    {
+      minDepth--;
+      assert(minDepth == pollCurrentLocalScope(s));
+    }
     assert(minDepth == pollCurrentLocalScope(s));
   }
-  assert(minDepth == pollCurrentLocalScope(s));
 
-  if (minDepth == 0 ||
+  if ((minDepth == 0 && !rootHeap) ||
       minOkay > minDepth ||
       minDepth > thread->currentDepth)
   {
@@ -280,7 +300,8 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
         desiredScope,
         potentialLocalScope);
 
-    releaseLocalScope(s, originalLocalScope);
+    if (!rootHeap)
+      releaseLocalScope(s, originalLocalScope);
     return;
   }
 
@@ -304,6 +325,11 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
     minDepth = maxDepth;
   }
 
+  /* Before the boot nothing remembers at depth 0: every store is within
+   * this one heap, which the write barrier doesn't record, and nothing else
+   * runs (no CC, no entanglement). */
+  assert(!rootHeap || 0 == HM_numRemembered(HM_HH_getRemSet(hh)));
+
   /* copy roots */
   struct ForwardHHObjptrArgs forwardHHObjptrArgs = {
       .hh = hh,
@@ -322,7 +348,8 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
       .stacksCopied = 0,
       .bytesMoved = 0,
       .objectsMoved = 0,
-      .concurrent = false};
+      .concurrent = false,
+      .rootHeap = rootHeap};
   CC_workList_init(s, &(forwardHHObjptrArgs.worklist));
   struct GC_foreachObjptrClosure forwardHHObjptrClosure =
       {.fun = forwardHHObjptr, .env = &forwardHHObjptrArgs};
@@ -587,19 +614,30 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
 
   /* ======================================================================= */
 
-  /* forward contents of deque, only for the range of the deque that is
-   * in-scope of this collection. */
-  oldObjectCopied = forwardHHObjptrArgs.objectsCopied;
-  foreachObjptrInSequenceSlice(
-    s,
-    objptrToPointer(s->wsQueue, NULL),
-    &forwardHHObjptrClosure,
-    minDepth,
-    originalLocalScope
-  );
-  LOG(LM_HH_COLLECTION, LL_DEBUG,
-      "Copied %" PRIu64 " objects from deque",
-      forwardHHObjptrArgs.objectsCopied - oldObjectCopied);
+  if (rootHeap) {
+    /* The globals (and with them the statics), the root static heap, and
+     * the threads that GC_state holds for every processor: the signal
+     * handler and C-call threads are in this heap. There is no deque. */
+    oldObjectCopied = forwardHHObjptrArgs.objectsCopied;
+    foreachGlobalObjptr(s, &forwardHHObjptrClosure);
+    LOG(LM_HH_COLLECTION, LL_DEBUG,
+        "Copied %" PRIu64 " objects from globals",
+        forwardHHObjptrArgs.objectsCopied - oldObjectCopied);
+  } else {
+    /* forward contents of deque, only for the range of the deque that is
+     * in-scope of this collection. */
+    oldObjectCopied = forwardHHObjptrArgs.objectsCopied;
+    foreachObjptrInSequenceSlice(
+      s,
+      objptrToPointer(s->wsQueue, NULL),
+      &forwardHHObjptrClosure,
+      minDepth,
+      originalLocalScope
+    );
+    LOG(LM_HH_COLLECTION, LL_DEBUG,
+        "Copied %" PRIu64 " objects from deque",
+        forwardHHObjptrArgs.objectsCopied - oldObjectCopied);
+  }
 
   LOG(LM_HH_COLLECTION, LL_DEBUG, "END root copy");
 
@@ -1032,7 +1070,8 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
   LOG(LM_HH_COLLECTION, LL_DEBUG,
       "END");
 
-  releaseLocalScope(s, originalLocalScope);
+  if (!rootHeap)
+    releaseLocalScope(s, originalLocalScope);
   return;
 }
 
@@ -1701,7 +1740,9 @@ void forwardHHObjptr(
       op,
       (uintptr_t)p);
 
-  if (!isObjptr(op) || isObjptrInRootHeap(s, op))
+  /* Depth 0 is in scope only in a collection of a root heap, before the
+   * scheduler boots (minDepth is never 0 otherwise). */
+  if (!isObjptr(op) || (args->minDepth > 0 && isObjptrInRootHeap(s, op)))
   {
     /* does not point to an HH objptr, so not in scope for collection */
     LOG(LM_HH_COLLECTION, LL_DEBUGMORE,
@@ -1752,6 +1793,9 @@ void forwardHHObjptr(
            args->fromSpace[HM_getObjptrDepth(op)])
   {
     // assert (!decheck(s, op));
+    /* In a collection of the root heap, before the boot: another depth-0
+     * heap is one of the other processors' initial threads', which hold a
+     * thread and an empty stack, and point nowhere. */
     return;
   }
 
@@ -1832,6 +1876,11 @@ void forwardHHObjptr(
       args->stacksCopied++;
       break;
     case WEAK_TAG:
+      /* Weak pointers are unsupported. Before the scheduler boots, keep
+       * them as strong pointers, as they behaved when nothing collected
+       * depth 0. */
+      if (args->rootHeap)
+        break;
       die(__FILE__ ":%d: "
                    "forwardHHObjptr() does not support WEAK_TAG objects!",
           __LINE__);
