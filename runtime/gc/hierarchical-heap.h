@@ -154,6 +154,11 @@ size_t HM_HH_addRecentBytesAllocated(GC_thread thread, size_t bytes);
 
 uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread);
 
+/* TRUE until the scheduler's boot (see hierarchical-heap.c), which
+ * GC_HH_setDepth notes. */
+bool HM_HH_beforeBoot(GC_state s);
+void HM_HH_noteBootStarted(void);
+
 void HM_HH_forceLeftHeap(GC_state s, uint32_t processor, pointer threadp);
 void HM_HH_forceNewChunk(GC_state s);
 pointer HM_HH_getRoot(GC_state s, pointer threadp);

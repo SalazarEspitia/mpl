@@ -62,6 +62,18 @@ void GC_HH_setDepth(GC_state s, pointer threadp, Word32 depth) {
   GC_thread thread = threadObjptrToStruct(s, pointerToObjptr(threadp, NULL));
 
   assert(thread != NULL);
+  /* The scheduler's boot moves the original thread, whose heap is at depth 0,
+   * to depth 1 just before Parallel_init. The boot starts here: from now on
+   * the original thread's new objects go to depth 1, so depth 0 is not
+   * collected again and is no longer shared by the threads made before the
+   * boot (HM_HH_beforeBoot). After the boot this costs one load. */
+  if (HM_HH_beforeBoot(s)
+      && depth > 0
+      && NULL != thread->hierarchicalHeap
+      && 0 == HM_HH_getDepth(thread->hierarchicalHeap))
+  {
+    HM_HH_noteBootStarted();
+  }
   thread->currentDepth = depth;
   // printf("%s %d\n", "setting thread depth to ", depth);
   // printf("%s %d\n", "HH depth = ", thread->hierarchicalHeap->depth);
