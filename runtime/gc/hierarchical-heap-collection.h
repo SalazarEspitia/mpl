@@ -51,6 +51,10 @@ struct ForwardHHObjptrArgs
   /*worklist for mark and scan*/
   struct CC_workList worklist;
   bool concurrent;
+
+  /* a collection of the root heap (minDepth == 0, before the scheduler
+   * boots; see HM_HHC_collectLocal) */
+  bool rootHeap;
 };
 
 struct checkDEDepthsArgs

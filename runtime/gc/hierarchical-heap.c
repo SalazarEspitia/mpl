@@ -1339,11 +1339,24 @@ bool HM_HH_beforeBoot(GC_state s) {
   return !bootStarted && !Proc_isInitialized(s);
 }
 
+/* Before the boot this processor is the only one running SML code, no
+ * deque is registered, and the running thread holds the program's one heap
+ * (see GC_switchToThread). That heap can then be collected like a leaf
+ * heap, with the full root set (see HM_HHC_collectLocal). Once the boot has
+ * started, depth 0 is never collected, as before. */
+bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread) {
+  return s->wsQueueTop == BOGUS_OBJPTR
+         && HM_HH_beforeBoot(s)
+         && 0 == thread->currentDepth
+         && 0 == HM_HH_getDepth(thread->hierarchicalHeap);
+}
+
 uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread)
 {
   struct HM_HierarchicalHeap* hh = thread->hierarchicalHeap;
+  bool rootHeap = HM_HH_canCollectRootHeap(s, thread);
 
-  if (s->wsQueueTop == BOGUS_OBJPTR)
+  if (s->wsQueueTop == BOGUS_OBJPTR && !rootHeap)
     return thread->currentDepth+1; /* don't collect */
 
   if (thread->bytesAllocatedSinceLastCollection <
@@ -1352,8 +1365,11 @@ uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread)
     return thread->currentDepth+1; /* don't collect */
   }
 
-  uint64_t topval = *(uint64_t*)objptrToPointer(s->wsQueueTop, NULL);
-  uint32_t potentialLocalScope = UNPACK_IDX(topval);
+  uint32_t potentialLocalScope = 0;
+  if (!rootHeap) {
+    uint64_t topval = *(uint64_t*)objptrToPointer(s->wsQueueTop, NULL);
+    potentialLocalScope = UNPACK_IDX(topval);
+  }
 
   size_t budget = 4 * thread->bytesAllocatedSinceLastCollection;
 

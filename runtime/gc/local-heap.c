@@ -84,9 +84,10 @@ void HM_ensureHierarchicalHeapAssurances(
    * a desired scope based on number of allocations performed. If we
    * haven't allocated too much, then the computed desired scope will
    * be larger than thread->currentDepth, indicating that we should
-   * NOT collect right now.
+   * NOT collect right now. Before the scheduler boots, a forced
+   * collection collects the root heap (scope 0).
    */
-  uint32_t desiredScope = 1;
+  uint32_t desiredScope = HM_HH_canCollectRootHeap(s, thread) ? 0 : 1;
   if (!forceGC) desiredScope = HM_HH_desiredCollectionScope(s, thread);
 
   if (desiredScope <= thread->currentDepth)
