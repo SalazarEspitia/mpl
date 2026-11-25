@@ -6,10 +6,39 @@
  * See the file MLton-LICENSE for details.
  */
 
+/* A thread made before the scheduler's boot has no heap of its own: until
+ * the boot the program has one heap, which the running thread holds (see
+ * copyThreadWithHeap and GC_switchToThread). The first time such a thread
+ * runs after the boot, give it what newThreadWithHeap would have given it: a
+ * fresh depth-0 heap, with its stack in a chunk of its own. The stack is
+ * copied into it: left in the heap of before the boot, it would grow in a
+ * chunk list that the other threads made before the boot share, now on
+ * several processors. The thread object stays where it is, in a depth-0
+ * heap that is never collected again. The caller has claimed the thread
+ * (currentProcNum), so no other processor touches it. */
+static void giveHeapToThreadMadeBeforeBoot(GC_state s, GC_thread thread) {
+  assert(!HM_HH_beforeBoot(s));
+  assert(NULL == thread->currentChunk);
+
+  HM_HierarchicalHeap hh = HM_HH_new(s, 0);
+  thread->hierarchicalHeap = hh;
+  thread->currentDepth = 0;
+  thread->bytesAllocatedSinceLastCollection = 0;
+  thread->bytesSurvivedLastCollection = 0;
+
+  GC_stack from = (GC_stack)objptrToPointer(thread->stack, NULL);
+  GC_stack to = newStackInOwnChunk(s, hh, from->reserved, DECHECK_BOGUS_TID);
+  copyStack(s, from, to);
+  thread->stack = pointerToObjptr((pointer)to, NULL);
+
+  if (!HM_HH_extend(s, thread, GC_HEAP_LIMIT_SLOP)) {
+    DIE("Ran out of space for Hierarchical Heap!");
+  }
+  assert(thread->currentChunk->mightContainMultipleObjects);
+}
+
 void switchToThread(GC_state s, objptr op) {
   GC_thread thread = (GC_thread)(objptrToPointer(op, NULL) + offsetofThread(s));
-
-  assert(thread->hierarchicalHeap != NULL);
 
   size_t terminateCheckCounter = 0;
   int otherProcNum = atomicLoadS32(&(thread->currentProcNum));
@@ -25,6 +54,10 @@ void switchToThread(GC_state s, objptr op) {
   }
   __atomic_thread_fence(__ATOMIC_SEQ_CST);
   atomicStoreS32(&(thread->currentProcNum), s->procNumber);
+
+  if (NULL == thread->hierarchicalHeap)
+    giveHeapToThreadMadeBeforeBoot(s, thread);
+  assert(thread->hierarchicalHeap != NULL);
 
   if (DEBUG_THREADS) {
     // GC_thread thread;
