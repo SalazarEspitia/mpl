@@ -236,6 +236,53 @@ GC_thread newThreadWithHeap(
   return thread;
 }
 
+/* A new, empty stack in a chunk of its own at the end of hh's chunk list,
+ * as newThreadWithHeap and growStackCurrent make them, so that it can grow
+ * and be moved whole (invariantForMutatorStack). Counted in the statistics
+ * as the program's allocation, as growStackCurrent counts a new stack. */
+GC_stack newStackInOwnChunk(
+  GC_state s,
+  HM_HierarchicalHeap hh,
+  size_t reserved,
+  decheck_tid_t decheckState)
+{
+  size_t promoStackReserved = desiredPromoStackReserved(s, reserved);
+  size_t stackSize = sizeofStackWithMetaData(s, reserved, promoStackReserved);
+
+  if (reserved > s->cumulativeStatistics->maxStackSize)
+    s->cumulativeStatistics->maxStackSize = reserved;
+  s->cumulativeStatistics->bytesAllocated += stackSize;
+
+  HM_chunk chunk = HM_allocateChunkWithPurpose(
+    HM_HH_getChunkList(hh),
+    stackSize,
+    BLOCK_FOR_HEAP_CHUNK);
+  if (NULL == chunk) {
+    DIE("Ran out of space for a stack!");
+  }
+  assert(stackSize < HM_getChunkSizePastFrontier(chunk));
+  chunk->levelHead = HM_HH_getUFNode(hh);
+  chunk->mightContainMultipleObjects = FALSE;
+  chunk->decheckState = decheckState;
+
+  pointer frontier = HM_getChunkFrontier(chunk);
+  assert(GC_STACK_METADATA_SIZE == GC_HEADER_SIZE);
+  *((GC_header*)frontier) = GC_STACK_HEADER;
+  GC_stack stack = (GC_stack)(frontier + GC_HEADER_SIZE);
+  stack->reserved = reserved;
+  stack->used = 0;
+  stack->promoStackReserved = promoStackReserved;
+  stack->promoStackBot = getStackBottom(s, stack) + reserved;
+  stack->promoStackTop = stack->promoStackBot;
+
+  HM_updateChunkFrontierInList(
+    HM_HH_getChunkList(hh),
+    chunk,
+    frontier + stackSize);
+
+  return stack;
+}
+
 static inline void setFrontier (GC_state s, pointer p,
                                 ARG_USED_FOR_ASSERT size_t bytes) {
   p = alignFrontier (s, p);
