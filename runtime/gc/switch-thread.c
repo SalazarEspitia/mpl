@@ -46,6 +46,8 @@ void handOverHeapBeforeBoot(
   assert(NULL != from->hierarchicalHeap);
   assert(0 == HM_HH_getDepth(from->hierarchicalHeap));
   assert(0 == from->currentDepth);
+  /* every store before the boot is within the one heap */
+  assert(HM_HH_remembersNothing(from->hierarchicalHeap));
   if (from == to)
     return;
   assert(NULL == to->hierarchicalHeap);
