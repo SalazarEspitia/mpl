@@ -1319,6 +1319,26 @@ size_t HM_HH_addRecentBytesAllocated(GC_thread thread, size_t bytes) {
   return thread->bytesAllocatedSinceLastCollection;
 }
 
+/* Set once the scheduler's boot has started: GC_HH_setDepth sets it when it
+ * moves a thread whose heap is at depth 0 to a deeper depth, which the boot
+ * does to the original thread just before Parallel_init. Only one processor
+ * runs SML code until Parallel_init, so a plain flag is enough. */
+static bool bootStarted = FALSE;
+
+void HM_HH_noteBootStarted(void) {
+  bootStarted = TRUE;
+}
+
+/* Before the scheduler's boot only this processor runs SML code: the others
+ * wait in Proc_waitForInitialization until MLton.Parallel.initializeProcessors
+ * (Parallel_init). A program that never loads the scheduler stays in this
+ * state. TRUE until the boot moves the original thread off depth 0, or until
+ * Parallel_init, whichever comes first; FALSE for good after that, at the
+ * cost of one load. */
+bool HM_HH_beforeBoot(GC_state s) {
+  return !bootStarted && !Proc_isInitialized(s);
+}
+
 uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread)
 {
   struct HM_HierarchicalHeap* hh = thread->hierarchicalHeap;
