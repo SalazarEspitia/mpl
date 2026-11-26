@@ -51,9 +51,16 @@ bool ES_newEntry(GC_state s, objptr op, struct ES_entry *entry) {
   ES_cell cell = ES_cellOf(s, HM_getChunkOf(objptrToPointer(op, NULL)));
   uint64_t old = __atomic_fetch_add(&(cell->state), ES_CELL_REF, __ATOMIC_SEQ_CST);
   if (old & ES_CELL_DEAD) {
-    /* The chunk is being freed while the caller still reaches op. That would
-     * be a collector bug (the same one that would make mark_suspect's header
-     * write unsafe); make no entry. */
+    /* NOT a safety net. An add is safe only under the assumption stated at
+     * ES_newEntry's declaration: the caller reaches op, so no collector is
+     * freeing op's chunk. If that were false (a collector bug, the same one
+     * that would make mark_suspect's header write unsafe), this branch would
+     * catch one interleaving of three: the kill landing between ES_cellOf's
+     * load and the fetch_add above, with other entries outstanding. The
+     * other two pass in silence: the free reading suspectCell == NULL just
+     * before ES_cellOf installs a cell (the cell sits on a freed block and is
+     * never marked dead), and the cell freed and recycled between the load
+     * and the fetch_add (the reference lands on another chunk's cell). */
     assert(FALSE && "a suspect was added to a chunk that is being freed");
     uint64_t now = __atomic_sub_fetch(&(cell->state), ES_CELL_REF, __ATOMIC_SEQ_CST);
     if (0 == (now & ~ES_CELL_DEAD))

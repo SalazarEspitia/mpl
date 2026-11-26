@@ -64,10 +64,19 @@ COMPILE_TIME_ASSERT(ES_entry__size, sizeof(objptr) != 8 || sizeof(struct ES_entr
 void ES_initCellAllocators(GC_state s);
 /* the chunk's cell, allocated and installed if it has none */
 ES_cell ES_cellOf(GC_state s, HM_chunk chunk);
-/* A new entry for op, with its reference on the cell of op's chunk. The
- * caller holds a live reference to op (as it must to write op's header).
- * False: the chunk is being freed (not expected: the debug runtime asserts);
- * no entry is made. */
+/* A new entry for op, with its reference on the cell of op's chunk.
+ *
+ * ASSUMPTION, and the whole safety argument for adds: the caller reaches op
+ * (a mutator holding a live reference to it, as it must to write op's header
+ * in mark_suspect; or the local collection that has just copied op into its
+ * own to-space), so no collector is freeing op's chunk while this runs. The
+ * cell protects uses of an entry, not its creation: nothing here would hold
+ * the chunk if the assumption were false.
+ *
+ * False: the cell was found dead, and no entry is made. That cannot happen
+ * under the assumption (the debug runtime asserts), and it is not a check of
+ * the assumption: of the three ways a free could interleave with an add, it
+ * sees one (see the definition). */
 bool ES_newEntry(GC_state s, objptr op, struct ES_entry *entry);
 /* Take a lease for the entry (op, cell). False: the chunk is gone; the
  * entry's reference has been dropped and the entry must be discarded. */
