@@ -58,7 +58,7 @@ fun experiment () =
     val () = print "phase 2 done\n"
 
     (* phase 3 *)
-    val n = 60000   (* parent session: 300000 overflowed a 32-bit Int in the sum *)
+    val n = 60000   (* keeps the sum within a 32-bit Int *)
     val lst = List.tabulate (n, fn i => i)
     val expect = List.foldl op+ 0 lst
     val bad = ref 0
