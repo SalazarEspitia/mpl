@@ -52,13 +52,26 @@ typedef struct ES_cell *ES_cell;
 #define ES_CELL_REF ((uint64_t)1 << 24)
 #define ES_CELL_REFS(state) ((state) >> 24)
 
+/* What a suspect list holds: the suspect, and a counted reference to the
+ * cell of the suspect's chunk. */
+struct ES_entry {
+  objptr op;
+  ES_cell cell;
+};
+COMPILE_TIME_ASSERT(ES_entry__size, sizeof(objptr) != 8 || sizeof(struct ES_entry) == 16);
+
 /* one per processor (cells are freed by whoever drops the last reference) */
 void ES_initCellAllocators(GC_state s);
 /* the chunk's cell, allocated and installed if it has none */
 ES_cell ES_cellOf(GC_state s, HM_chunk chunk);
-/* Take a lease for an entry on its cell. False: the chunk is gone; the
+/* A new entry for op, with its reference on the cell of op's chunk. The
+ * caller holds a live reference to op (as it must to write op's header).
+ * False: the chunk is being freed (not expected: the debug runtime asserts);
+ * no entry is made. */
+bool ES_newEntry(GC_state s, objptr op, struct ES_entry *entry);
+/* Take a lease for the entry (op, cell). False: the chunk is gone; the
  * entry's reference has been dropped and the entry must be discarded. */
-bool ES_lease(GC_state s, ES_cell cell);
+bool ES_lease(GC_state s, objptr op, ES_cell cell);
 /* Give a lease back; with dropRef, the entry's reference too (the entry is
  * being discarded). */
 void ES_release(GC_state s, ES_cell cell, bool dropRef);
@@ -73,6 +86,7 @@ typedef struct ES_clearArgs {
   size_t numMoved;
   size_t numFailed;
   size_t numCleared;
+  size_t numDropped;
 } * ES_clearArgs;
 
 
@@ -91,7 +105,6 @@ typedef struct ES_finishedClearSetGrain {
 
 
 bool ES_mark(__attribute__((unused)) GC_state s, objptr op);
-void ES_unmark(GC_state s, objptr op, ES_clearArgs args);
 
 void ES_add(GC_state s, HM_chunkList es, objptr op);
 

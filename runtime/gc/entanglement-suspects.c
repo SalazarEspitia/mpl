@@ -47,7 +47,25 @@ ES_cell ES_cellOf(GC_state s, HM_chunk chunk) {
   return cell;
 }
 
-bool ES_lease(GC_state s, ES_cell cell) {
+bool ES_newEntry(GC_state s, objptr op, struct ES_entry *entry) {
+  ES_cell cell = ES_cellOf(s, HM_getChunkOf(objptrToPointer(op, NULL)));
+  uint64_t old = __atomic_fetch_add(&(cell->state), ES_CELL_REF, __ATOMIC_SEQ_CST);
+  if (old & ES_CELL_DEAD) {
+    /* The chunk is being freed while the caller still reaches op. That would
+     * be a collector bug (the same one that would make mark_suspect's header
+     * write unsafe); make no entry. */
+    assert(FALSE && "a suspect was added to a chunk that is being freed");
+    uint64_t now = __atomic_sub_fetch(&(cell->state), ES_CELL_REF, __ATOMIC_SEQ_CST);
+    if (0 == (now & ~ES_CELL_DEAD))
+      ES_freeCell(s, cell);
+    return FALSE;
+  }
+  entry->op = op;
+  entry->cell = cell;
+  return TRUE;
+}
+
+bool ES_lease(GC_state s, __attribute__((unused)) objptr op, ES_cell cell) {
   assert(NULL != cell); /* invariant 1 */
   uint64_t old = __atomic_fetch_add(&(cell->state), ES_CELL_LEASE, __ATOMIC_SEQ_CST);
   assert(ES_CELL_REFS(old) >= 1); /* the entry's own reference */
@@ -59,6 +77,12 @@ bool ES_lease(GC_state s, ES_cell cell) {
       ES_freeCell(s, cell);
     return FALSE;
   }
+#if ASSERT
+  /* invariant 2: under the lease, op's chunk is live and this is its cell */
+  HM_chunk chunk = (HM_chunk)blockOf(objptrToPointer(op, NULL));
+  assert(CHUNK_MAGIC == chunk->magic);
+  assert(cell == __atomic_load_n(&(chunk->suspectCell), __ATOMIC_ACQUIRE));
+#endif
   return TRUE;
 }
 
@@ -161,16 +185,36 @@ void clear_suspect(
     objptr op,
     void *rawArgs)
 {
+  /* opp points at the op field of an entry in the list being cleared */
+  struct ES_entry entry = *(struct ES_entry *)opp;
+  assert(entry.op == op);
   pointer p = objptrToPointer(op, NULL);
   ES_clearArgs eargs = (ES_clearArgs) rawArgs;
 
+  if (!ES_lease(s, op, entry.cell)) {
+    /* the object's chunk has been freed: nothing to clear */
+    s->cumulativeStatistics->numSuspectsDroppedDeadClear++;
+    eargs->numDropped++;
+    return;
+  }
+
+  /* Under the lease the chunk is live: the word is the object's header, or
+   * its forwarding pointer if a local collection copied the object without
+   * seeing this entry. */
   GC_header header = getHeader(p);
+  if (!(header & GC_VALID_HEADER_MASK)) {
+    ES_release(s, entry.cell, TRUE);
+    s->cumulativeStatistics->numSuspectsDroppedForwardedClear++;
+    eargs->numDropped++;
+    return;
+  }
   uint32_t unpinDepth = (header & UNPIN_DEPTH_MASK) >> UNPIN_DEPTH_SHIFT;
 
   if (pinType(header) == PIN_ANY && unpinDepth < eargs->heapDepth) {
     /* Not ready to be cleared */
+    ES_release(s, entry.cell, FALSE);
     HM_HierarchicalHeap unpinHeap = HM_HH_getHeapAtDepth(s, eargs->thread, unpinDepth);
-    HM_storeInChunkListWithPurpose(HM_HH_getSuspects(unpinHeap), opp, sizeof(objptr), BLOCK_FOR_SUSPECTS);
+    HM_storeInChunkListWithPurpose(HM_HH_getSuspects(unpinHeap), &entry, sizeof(struct ES_entry), BLOCK_FOR_SUSPECTS);
     eargs->numMoved++;
     return;
   }
@@ -178,12 +222,14 @@ void clear_suspect(
   GC_header newHeader = header & ~(SUSPECT_MASK);
   if (__sync_bool_compare_and_swap(getHeaderp(p), header, newHeader)) {
     /* clearing successful */
+    ES_release(s, entry.cell, TRUE);
     eargs->numCleared++;
     return;
   }
   else {
     /*oops something changed in b/w, let's try at the next join*/
-    HM_storeInChunkListWithPurpose(eargs->newList, opp, sizeof(objptr), BLOCK_FOR_SUSPECTS);
+    ES_release(s, entry.cell, FALSE);
+    HM_storeInChunkListWithPurpose(eargs->newList, &entry, sizeof(struct ES_entry), BLOCK_FOR_SUSPECTS);
     eargs->numFailed++;
 
     LOG(LM_HIERARCHICAL_HEAP, LL_INFO,
@@ -200,11 +246,7 @@ bool ES_mark(__attribute__((unused)) GC_state s, objptr op) {
   return mark_suspect(op);
 }
 
-void ES_unmark(GC_state s, objptr op, ES_clearArgs args) {
-  clear_suspect(s, &op, op, args);
-}
-
-void ES_add(__attribute__((unused)) GC_state s, HM_chunkList es, objptr op)
+void ES_add(GC_state s, HM_chunkList es, objptr op)
 {
 
   if (!mark_suspect(op))
@@ -213,7 +255,10 @@ void ES_add(__attribute__((unused)) GC_state s, HM_chunkList es, objptr op)
     return;
   }
   s->cumulativeStatistics->numSuspectsMarked++;
-  HM_storeInChunkListWithPurpose(es, &op, sizeof(objptr), BLOCK_FOR_SUSPECTS);
+  struct ES_entry entry;
+  if (!ES_newEntry(s, op, &entry))
+    return;
+  HM_storeInChunkListWithPurpose(es, &entry, sizeof(struct ES_entry), BLOCK_FOR_SUSPECTS);
 }
 
 int ES_foreachSuspect(
@@ -231,11 +276,13 @@ int ES_foreachSuspect(
     pointer frontier = HM_getChunkFrontier(chunk);
     while (p < frontier)
     {
-      // objptr* opp = (objptr*)p;
-      callIfIsObjptr(s, fObjptrClosure, (objptr *)p);
-      p += sizeof(void *);
+      /* p is an entry; the callback gets a pointer to its op field (the
+       * entry's first field) and finds the cell from there */
+      assert(isObjptr(((struct ES_entry *)p)->op));
+      callIfIsObjptr(s, fObjptrClosure, &(((struct ES_entry *)p)->op));
+      p += sizeof(struct ES_entry);
     }
-    count += ((int)(frontier - HM_getChunkStart(chunk)))/(sizeof(void*));
+    count += ((int)(frontier - HM_getChunkStart(chunk)))/(sizeof(struct ES_entry));
     chunk = chunk->nextChunk;
   }
   return count;
@@ -269,7 +316,7 @@ void ES_clear(GC_state s, HM_HierarchicalHeap hh)
   struct HM_chunkList oldList = *(es);
   HM_initChunkList(HM_HH_getSuspects(hh));
 
-  size_t numSuspects = HM_getChunkListUsedSize(&oldList) / sizeof(objptr);
+  size_t numSuspects = HM_getChunkListUsedSize(&oldList) / sizeof(struct ES_entry);
   if (numSuspects >= SUSPECTS_THRESHOLD) {
     timespec_now(&startTime);
   }
@@ -280,7 +327,8 @@ void ES_clear(GC_state s, HM_HierarchicalHeap hh)
     .thread = getThreadCurrent(s),
     .numMoved = 0,
     .numCleared = 0,
-    .numFailed = 0
+    .numFailed = 0,
+    .numDropped = 0
   };
   
   struct GC_foreachObjptrClosure fObjptrClosure =
@@ -305,10 +353,11 @@ void ES_clear(GC_state s, HM_HierarchicalHeap hh)
     timespec_now(&stopTime);
     timespec_sub(&stopTime, &startTime);
     LOG(LM_HIERARCHICAL_HEAP, LL_FORCE,
-      "time to process %zu suspects (%zu cleared, %zu moved) at depth %u: %ld.%09ld",
+      "time to process %zu suspects (%zu cleared, %zu moved, %zu dropped) at depth %u: %ld.%09ld",
       numSuspects,
       eargs.numCleared,
       eargs.numMoved,
+      eargs.numDropped,
       HM_HH_getDepth(hh),
       (long)stopTime.tv_sec,
       stopTime.tv_nsec
@@ -321,7 +370,7 @@ size_t ES_numSuspects(
   __attribute__((unused)) GC_state s,
   HM_HierarchicalHeap hh)
 {
-  return HM_getChunkListUsedSize(HM_HH_getSuspects(hh)) / sizeof(objptr);
+  return HM_getChunkListUsedSize(HM_HH_getSuspects(hh)) / sizeof(struct ES_entry);
 }
 
 
@@ -376,27 +425,45 @@ size_t ES_numChunksInClearSet(
 
 
 void clear_suspect_par_safe(
-  __attribute__((unused)) GC_state s,
-  objptr *opp,
-  objptr op,
+  GC_state s,
+  struct ES_entry *entryp,
   struct HM_chunkList *output,
   size_t lenOutput)
 {
-  pointer p = objptrToPointer(op, NULL);
+  struct ES_entry entry = *entryp;
+  pointer p = objptrToPointer(entry.op, NULL);
+
+  if (!ES_lease(s, entry.op, entry.cell)) {
+    /* the object's chunk has been freed: nothing to clear */
+    s->cumulativeStatistics->numSuspectsDroppedDeadParClear++;
+    return;
+  }
+
   while (TRUE) {
     GC_header header = getHeader(p);
+    if (!(header & GC_VALID_HEADER_MASK)) {
+      /* A forwarding pointer: a local collection copied the object while
+       * this entry was in the clear set, out of the collection's sight. The
+       * copy keeps its suspect bit and has no entry (reads of it stay on the
+       * slow path). */
+      ES_release(s, entry.cell, TRUE);
+      s->cumulativeStatistics->numSuspectsDroppedForwardedParClear++;
+      return;
+    }
     uint32_t unpinDepth = (header & UNPIN_DEPTH_MASK) >> UNPIN_DEPTH_SHIFT;
 
     // Note: lenOutput == depth of heap whose suspects we are clearing
     if (pinType(header) == PIN_ANY && unpinDepth < lenOutput) {
       /* Not ready to be cleared; move it instead */
-      HM_storeInChunkListWithPurpose(&(output[unpinDepth]), opp, sizeof(objptr), BLOCK_FOR_SUSPECTS);
+      ES_release(s, entry.cell, FALSE);
+      HM_storeInChunkListWithPurpose(&(output[unpinDepth]), &entry, sizeof(struct ES_entry), BLOCK_FOR_SUSPECTS);
       return;
     }
 
     GC_header newHeader = header & ~(SUSPECT_MASK);
     if (__sync_bool_compare_and_swap(getHeaderp(p), header, newHeader)) {
       /* clearing successful */
+      ES_release(s, entry.cell, TRUE);
       return;
     }
     else {
@@ -436,12 +503,12 @@ ES_finishedClearSetGrain ES_processClearSetGrain(
     pointer frontier = HM_getChunkFrontier(chunk);
     while (p < frontier)
     {
-      objptr* opp = (objptr*)p;
-      objptr op = *opp;
-      if (isObjptr(op)) {
-        clear_suspect_par_safe(s, opp, op, output, es->depth);
+      struct ES_entry *entryp = (struct ES_entry *)p;
+      assert(isObjptr(entryp->op));
+      if (isObjptr(entryp->op)) {
+        clear_suspect_par_safe(s, entryp, output, es->depth);
       }
-      p += sizeof(objptr);
+      p += sizeof(struct ES_entry);
     }
   }
 

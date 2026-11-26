@@ -1155,62 +1155,50 @@ objptr relocateObject(
 
 /* ========================================================================= */
 
-/* Is op pinned, but in a chunk this collection is about to free?
- *
- * A pinned object in scope survives the collection only if the collection
- * reaches it, through a remembered-set entry or from the roots: its chunk is
- * then moved to args->pinned[d] and marked pinnedDuringCollection. Every other
- * chunk of the from-space is freed. An object can keep its pin bits without
- * being reached: a CC drops the remembered-set entry of a PIN_ANY object whose
- * unpin depth is at least its depth, without unpinning it (see the comment in
- * forwardHHObjptr), and make_entangled pins objects reached through an
- * immutable object without adding an entry.
- */
-static bool isPinnedInFreedChunk(objptr op, struct ForwardHHObjptrArgs *args)
-{
-  /* Read the chunk's metadata only if the block is still a chunk. A suspect
-   * entry can outlive its chunk: a freed chunk's magic no longer matches, and
-   * its levelHead holds the free list's link. Such an entry is left as
-   * before. */
-  HM_chunk chunk = (HM_chunk)blockOf(objptrToPointer(op, NULL));
-  if (CHUNK_MAGIC != chunk->magic
-      || chunk->pinnedDuringCollection
-      || NULL == chunk->levelHead)
-    return FALSE;
-  HM_HierarchicalHeap hh = HM_getLevelHead(chunk);
-  uint32_t depth = HM_HH_getDepth(hh);
-  return depth >= args->minDepth
-      && depth <= args->maxDepth
-      && args->fromSpace[depth] == hh;
-}
-
+/* PROTOTYPE (weak cells, entanglement-suspects.h). For each entry of the
+ * suspect lists in scope: if its object was copied, the entry follows the
+ * copy (a new reference, on the cell of the copy's chunk); otherwise it is
+ * kept as it is. No test of pins or of the from-space is needed: if this
+ * collection frees the object's chunk, the chunk free marks the cell dead and
+ * the entry is dropped at its next use; and an entry whose chunk was freed
+ * earlier, by any collector, is dropped here. */
 void copySuspect(
   GC_state s,
-  __attribute__((unused)) objptr *opp,
+  objptr *opp,
   objptr op,
   void *rawArghh)
 {
   struct ForwardHHObjptrArgs *args = (struct ForwardHHObjptrArgs *)rawArghh;
   assert(isObjptr(op));
+  struct ES_entry entry = *(struct ES_entry *)opp;
+  assert(entry.op == op);
   pointer p = objptrToPointer(op, NULL);
-  objptr new_ptr = op;
+
+  if (!ES_lease(s, op, entry.cell)) {
+    s->cumulativeStatistics->numSuspectsDroppedDeadLGC++;
+    return;
+  }
   if (hasFwdPtr(p))
   {
-    new_ptr = getFwdPtr(p);
+    objptr new_ptr = getFwdPtr(p);
+    ES_release(s, entry.cell, TRUE);
+    /* Forwarded by this collection: every collection that copies a suspect
+     * has the suspect's list in its scope (the lists of the heaps it
+     * collects), except for a clear set taken out of its heap, whose
+     * forwarded entries the clear drops. */
+    assert(isObjptrInToSpace(new_ptr, args));
+    if (!ES_newEntry(s, new_ptr, &entry))
+      return;
   }
-  else if (!isPinned(op) || isPinnedInFreedChunk(op, args))
+  else
   {
-    /* the suspect does not have a fwd-ptr, and is either not pinned or pinned
-     * in a chunk this collection frees ==> its garbage, so skip it. (Keeping
-     * the entry would leave it pointing into a freed chunk.)
-     */
-    return;
+    ES_release(s, entry.cell, FALSE);
   }
   uint32_t opDepth = args->toDepth;
   HM_storeInChunkListWithPurpose(
     HM_HH_getSuspects(toSpaceHH(s, args, opDepth)),
-    &new_ptr,
-    sizeof(objptr),
+    &entry,
+    sizeof(struct ES_entry),
     BLOCK_FOR_SUSPECTS);
 }
 
