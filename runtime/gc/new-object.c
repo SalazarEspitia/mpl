@@ -116,6 +116,11 @@ static GC_thread newThreadWithStack(
     GC_thread current = getThreadCurrent(s);
     stack = newStackInOwnChunk(s, current->hierarchicalHeap, reserved,
                                current->currentChunk->decheckState);
+    /* The stack's chunk gets its frontier directly, not through
+     * HM_HH_updateValues, so count it here, as growStackCurrent counts a
+     * new stack. */
+    s->cumulativeStatistics->bytesAllocated +=
+      sizeofStackWithMetaData(s, reserved, stack->promoStackReserved);
     HM_HH_addRecentBytesAllocated(current,
       HM_getChunkSize(HM_getChunkOf((pointer)stack)));
   } else {
@@ -274,8 +279,10 @@ GC_thread newThreadWithHeap(
 
 /* A new, empty stack in a chunk of its own at the end of hh's chunk list,
  * as newThreadWithHeap and growStackCurrent make them, so that it can grow
- * and be moved whole (invariantForMutatorStack). Counted in the statistics
- * as the program's allocation, as growStackCurrent counts a new stack. */
+ * and be moved whole (invariantForMutatorStack). The caller counts it in
+ * the statistics if it is the program's allocation (a new thread's stack);
+ * the copy of an existing stack into a thread's new heap is not
+ * (giveHeapToThreadMadeBeforeBoot). */
 GC_stack newStackInOwnChunk(
   GC_state s,
   HM_HierarchicalHeap hh,
@@ -287,7 +294,6 @@ GC_stack newStackInOwnChunk(
 
   if (reserved > s->cumulativeStatistics->maxStackSize)
     s->cumulativeStatistics->maxStackSize = reserved;
-  s->cumulativeStatistics->bytesAllocated += stackSize;
 
   HM_chunk chunk = HM_allocateChunkWithPurpose(
     s,
