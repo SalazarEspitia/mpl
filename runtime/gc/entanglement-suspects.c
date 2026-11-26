@@ -331,19 +331,20 @@ bool ES_mark(__attribute__((unused)) GC_state s, objptr op) {
   return mark_suspect(op);
 }
 
-void ES_add(GC_state s, HM_chunkList es, objptr op)
+bool ES_add(GC_state s, HM_chunkList es, objptr op)
 {
 
   if (!mark_suspect(op))
   {
     /* if op is already in es, skip*/
-    return;
+    return FALSE;
   }
   s->cumulativeStatistics->numSuspectsMarked++;
   struct ES_entry entry;
   if (!ES_newEntry(s, op, &entry))
-    return;
+    return FALSE;
   HM_storeInChunkListWithPurpose(es, &entry, sizeof(struct ES_entry), BLOCK_FOR_SUSPECTS);
+  return TRUE;
 }
 
 int ES_foreachSuspect(

@@ -72,6 +72,7 @@ struct GC_cumulativeStatistics {
   uintmax_t numEntanglements;         // count instances entanglement is detected
   uintmax_t numChecksSkipped;
   uintmax_t numSuspectsMarked;
+  uintmax_t numSuspectsMarkedEntangled;        /* of those, by an entangled read (decheck): the entry is in the reader's list, the object in another thread's heap */
   uintmax_t numSuspectsCleared;                /* entries visited by the clears at joins: cleared, dropped, moved or failed alike (an entry moved to a shallower list is visited again at a later join) */
   uintmax_t numSuspectBitsCleared;             /* of those, the entries whose object had its suspect bit cleared */
   /* PROTOTYPE: weak cells (entanglement-suspects.h) */

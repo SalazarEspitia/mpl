@@ -447,7 +447,9 @@ void make_entangled(
 
   if (mutable && !ES_contains(NULL, new_ptr)) {
     HM_HierarchicalHeap lcaHeap = HM_HH_getHeapAtDepth(s, getThreadCurrent(s), unpinDepth);
-    ES_add(s, HM_HH_getSuspects(lcaHeap), new_ptr);
+    /* an entry in the reader's list for an object in another thread's heap */
+    if (ES_add(s, HM_HH_getSuspects(lcaHeap), new_ptr))
+      s->cumulativeStatistics->numSuspectsMarkedEntangled++;
     assert(ES_contains(NULL, new_ptr));
   }
 
@@ -514,7 +516,8 @@ objptr manage_entangled(
   else {
     if (isMutableH(s, header) && !ES_contains(NULL, ptr)) {
       HM_HierarchicalHeap lcaHeap = HM_HH_getHeapAtDepth(s, getThreadCurrent(s), unpinDepth);
-      ES_add(s, HM_HH_getSuspects(lcaHeap), ptr);
+      if (ES_add(s, HM_HH_getSuspects(lcaHeap), ptr))
+        s->cumulativeStatistics->numSuspectsMarkedEntangled++;
       assert(ES_contains(NULL, ptr));
     }
 
