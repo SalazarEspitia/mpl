@@ -78,7 +78,10 @@ struct GC_cumulativeStatistics *newCumulativeStatistics(void) {
   cumulativeStatistics->numSuspectsCleared = 0;
   cumulativeStatistics->numSuspectCellsAllocated = 0;
   cumulativeStatistics->numSuspectCellsFreed = 0;
+  cumulativeStatistics->numSuspectBitsCleared = 0;
+  cumulativeStatistics->numSuspectCellInstallRaces = 0;
   cumulativeStatistics->numSuspectCellLeaseWaits = 0;
+  cumulativeStatistics->numSuspectCellLeaseRetries = 0;
   cumulativeStatistics->numChunksFreedWithSuspectCell = 0;
   cumulativeStatistics->numChunksFreedWithSuspectEntries = 0;
   cumulativeStatistics->numSuspectEntriesOutlivedChunk = 0;
