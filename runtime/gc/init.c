@@ -719,6 +719,8 @@ void GC_lateInit(GC_state s) {
 
   s->nextChunkAllocSize = s->controls->allocChunkSize;
 
+  ES_initCellAllocators(s);
+
   set_max_gdtoa_threads(s->numberOfProcs);
 
   /* Initialize profiling.  This must occur after processing
