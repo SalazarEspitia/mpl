@@ -91,6 +91,8 @@ struct GC_cumulativeStatistics *newCumulativeStatistics(void) {
   cumulativeStatistics->numSuspectsDroppedForwardedClear = 0;
   cumulativeStatistics->numSuspectsDroppedForwardedParClear = 0;
   cumulativeStatistics->numSuspectsDroppedForwardedLGC = 0;
+  cumulativeStatistics->numSuspectTestLeaseUses = 0;
+  cumulativeStatistics->numSuspectTestLeaseSleeps = 0;
   cumulativeStatistics->numSuspectsPinnedInChunkLGCFrees = 0;
   cumulativeStatistics->bytesPinnedEntangled = 0;
   cumulativeStatistics->currentPhaseBytesPinnedEntangled = 0;

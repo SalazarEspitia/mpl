@@ -89,6 +89,8 @@ struct GC_cumulativeStatistics {
   uintmax_t numSuspectsDroppedForwardedClear;    /* entries dropped in a live chunk at a forwarding pointer: clear at a join */
   uintmax_t numSuspectsDroppedForwardedParClear; /* ... parallel clear at a join */
   uintmax_t numSuspectsDroppedForwardedLGC;      /* ... a local collection's pass, at a forwarding pointer in a chunk outside its from-space */
+  uintmax_t numSuspectTestLeaseUses;           /* debug runtime only, test only (MPL_ES_TEST_LEASE_SLEEP): uses of an entry at the chosen sites */
+  uintmax_t numSuspectTestLeaseSleeps;         /* ... and the sleeps taken while holding a lease */
   uintmax_t numSuspectsPinnedInChunkLGCFrees;  /* debug runtime only: pinned, uncopied suspects in a chunk a local collection frees */
   uintmax_t bytesPinnedEntangled;
   uintmax_t currentPhaseBytesPinnedEntangled;
