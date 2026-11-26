@@ -1573,6 +1573,10 @@ void assertInvariants(GC_thread thread)
          chunk = chunk->nextChunk)
     {
       assert(HM_getLevelHead(chunk) == cursor);    }
+
+    /* PROTOTYPE (weak cells): every suspect entry of this heap has a valid
+     * cell, and a live chunk behind it unless the cell is dead */
+    ES_assertListInvariants(HM_HH_getSuspects(cursor));
   }
 
   /* check sorted by depth */

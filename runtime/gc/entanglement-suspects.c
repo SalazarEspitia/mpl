@@ -86,6 +86,36 @@ bool ES_lease(GC_state s, __attribute__((unused)) objptr op, ES_cell cell) {
   return TRUE;
 }
 
+#if ASSERT
+void ES_assertListInvariants(HM_chunkList list) {
+  if (NULL == list)
+    return;
+  for (HM_chunk chunk = HM_getChunkListFirstChunk(list); chunk != NULL; chunk = chunk->nextChunk) {
+    pointer frontier = HM_getChunkFrontier(chunk);
+    assert(0 == ((size_t)(frontier - HM_getChunkStart(chunk))) % sizeof(struct ES_entry));
+    for (pointer p = HM_getChunkStart(chunk); p < frontier; p += sizeof(struct ES_entry)) {
+      struct ES_entry *entry = (struct ES_entry *)p;
+      assert(isObjptr(entry->op));
+      assert(NULL != entry->cell);
+      /* a lease that keeps the entry's reference when the cell is dead */
+      uint64_t old = __atomic_fetch_add(&(entry->cell->state), ES_CELL_LEASE, __ATOMIC_SEQ_CST);
+      assert(ES_CELL_REFS(old) >= 1);
+      if (!(old & ES_CELL_DEAD)) {
+        HM_chunk objChunk = (HM_chunk)blockOf(objptrToPointer(entry->op, NULL));
+        assert(CHUNK_MAGIC == objChunk->magic);
+        assert(entry->cell == __atomic_load_n(&(objChunk->suspectCell), __ATOMIC_ACQUIRE));
+        assert(objptrToPointer(entry->op, NULL) < objChunk->frontier);
+        /* the word is the object's header, with the suspect bit, or a
+         * forwarding pointer */
+        GC_header h = getHeader(objptrToPointer(entry->op, NULL));
+        assert(!(h & GC_VALID_HEADER_MASK) || (h & SUSPECT_MASK));
+      }
+      __atomic_fetch_sub(&(entry->cell->state), ES_CELL_LEASE, __ATOMIC_SEQ_CST);
+    }
+  }
+}
+#endif
+
 void ES_release(__attribute__((unused)) GC_state s, ES_cell cell, bool dropRef) {
   LOCAL_USED_FOR_ASSERT uint64_t now =
     __atomic_sub_fetch(&(cell->state), ES_CELL_LEASE + (dropRef ? ES_CELL_REF : 0), __ATOMIC_SEQ_CST);
