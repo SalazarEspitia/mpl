@@ -109,6 +109,7 @@ HM_chunk HM_initializeChunk(pointer start, pointer end) {
   chunk->decheckState = DECHECK_BOGUS_TID;
   chunk->retireChunk = FALSE;
   chunk->magic = CHUNK_MAGIC;
+  chunk->suspectCell = NULL;
 
 #if ASSERT
   /* clear out memory to quickly catch some memory safety errors */
