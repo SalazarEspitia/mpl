@@ -1372,10 +1372,13 @@ bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread) {
          && 0 == HM_HH_getDepth(thread->hierarchicalHeap);
 }
 
-uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread)
+uint32_t HM_HH_desiredCollectionScope(
+  GC_state s,
+  GC_thread thread,
+  bool rootHeap)
 {
   struct HM_HierarchicalHeap* hh = thread->hierarchicalHeap;
-  bool rootHeap = HM_HH_canCollectRootHeap(s, thread);
+  assert(rootHeap == HM_HH_canCollectRootHeap(s, thread));
 
   if (s->wsQueueTop == BOGUS_OBJPTR && !rootHeap)
     return thread->currentDepth+1; /* don't collect */
