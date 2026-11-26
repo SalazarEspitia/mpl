@@ -104,7 +104,12 @@ void ES_assertListInvariants(HM_chunkList list) {
         HM_chunk objChunk = (HM_chunk)blockOf(objptrToPointer(entry->op, NULL));
         assert(CHUNK_MAGIC == objChunk->magic);
         assert(entry->cell == __atomic_load_n(&(objChunk->suspectCell), __ATOMIC_ACQUIRE));
-        assert(objptrToPointer(entry->op, NULL) < objChunk->frontier);
+        /* inside the chunk. Not "below the frontier": the chunk's frontier
+         * field is brought up to date only when its thread enters the
+         * runtime, and an entangled reader can hold an entry for an object
+         * another thread has allocated in its current chunk since then. */
+        assert(objptrToPointer(entry->op, NULL) >= HM_getChunkStart(objChunk));
+        assert(objptrToPointer(entry->op, NULL) < HM_getChunkLimit(objChunk));
         /* the word is the object's header, with the suspect bit, or a
          * forwarding pointer */
         GC_header h = getHeader(objptrToPointer(entry->op, NULL));
