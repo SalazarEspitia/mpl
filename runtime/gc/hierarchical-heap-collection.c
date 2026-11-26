@@ -1227,15 +1227,19 @@ void copySuspect(
      * word is no longer the object, so the entry can never be cleared; keeping
      * it would only make every later pass visit it.
      *
-     * NOT covered by this test: a chunk kept by an earlier collection of this
-     * heap is in this collection's from-space again, and an old forwarding
+     * NOT covered by this test: a chunk that an earlier collection of this
+     * heap kept (pinned) or retired to EBR can be in this collection's
+     * from-space again (a retired chunk's level head still leads to the
+     * from-space's heap record until EBR frees it), and an old forwarding
      * pointer in it passes. That needs an entry that was out of the scope of
      * the collection that copied its object and is in the scope of this one.
      * Every collection that copies a suspect has the suspect's list in its
      * scope (the lists of the heaps it collects), except for a clear set
-     * taken out of its heap, and the clear drops those entries (they never
-     * come back to a list); the debug runtime asserts that the target is in
-     * this collection's to-space. */
+     * taken out of its heap. The clear drops the taken entries; the ones it
+     * puts back, in the grains' output lists, are of objects pinned below
+     * the clear's depth, which can't be unpinned, and so copied, before the
+     * commit. The debug runtime asserts that the target is in this
+     * collection's to-space. */
     bool inScope = suspectChunkInFromSpace(HM_getChunkOf(p), args);
     ES_release(s, entry.cell, TRUE);
     if (!inScope) {
