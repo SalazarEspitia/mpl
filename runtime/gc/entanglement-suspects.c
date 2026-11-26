@@ -1,3 +1,114 @@
+/* ========================================================================
+ * PROTOTYPE: weak cells (see entanglement-suspects.h)
+ * ======================================================================== */
+
+static struct FixedSizeAllocator *ES_cellAllocators = NULL;
+
+void ES_initCellAllocators(GC_state s) {
+  assert(NULL == ES_cellAllocators);
+  ES_cellAllocators = malloc(s->numberOfProcs * sizeof(struct FixedSizeAllocator));
+  if (NULL == ES_cellAllocators)
+    DIE("Out of memory. Unable to allocate the suspect cell allocators.");
+  for (uint32_t i = 0; i < s->numberOfProcs; i++) {
+    initFixedSizeAllocator(&(ES_cellAllocators[i]), sizeof(struct ES_cell), BLOCK_FOR_SUSPECTS);
+  }
+}
+
+static inline FixedSizeAllocator ES_cellAllocator(GC_state s) {
+  assert(NULL != ES_cellAllocators);
+  assert(s->procNumber >= 0 && (uint32_t)s->procNumber < s->numberOfProcs);
+  return &(ES_cellAllocators[s->procNumber]);
+}
+
+static inline void ES_freeCell(GC_state s, ES_cell cell) {
+  /* no reference and no lease: nobody can reach the cell any more */
+  assert(0 == (__atomic_load_n(&(cell->state), __ATOMIC_RELAXED) & ~ES_CELL_DEAD));
+  s->cumulativeStatistics->numSuspectCellsFreed++;
+  freeFixedSize(ES_cellAllocator(s), cell);
+}
+
+ES_cell ES_cellOf(GC_state s, HM_chunk chunk) {
+  assert(CHUNK_MAGIC == chunk->magic);
+  ES_cell cell = __atomic_load_n(&(chunk->suspectCell), __ATOMIC_ACQUIRE);
+  if (NULL != cell)
+    return cell;
+
+  ES_cell fresh = (ES_cell)allocateFixedSize(ES_cellAllocator(s));
+  __atomic_store_n(&(fresh->state), ES_CELL_REF, __ATOMIC_RELAXED); /* the chunk's reference */
+  s->cumulativeStatistics->numSuspectCellsAllocated++;
+  if (__atomic_compare_exchange_n(&(chunk->suspectCell), &cell, fresh, FALSE,
+                                  __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
+    return fresh;
+
+  /* another processor installed one first; ours was never published */
+  __atomic_store_n(&(fresh->state), 0, __ATOMIC_RELAXED);
+  ES_freeCell(s, fresh);
+  assert(NULL != cell);
+  return cell;
+}
+
+bool ES_lease(GC_state s, ES_cell cell) {
+  assert(NULL != cell); /* invariant 1 */
+  uint64_t old = __atomic_fetch_add(&(cell->state), ES_CELL_LEASE, __ATOMIC_SEQ_CST);
+  assert(ES_CELL_REFS(old) >= 1); /* the entry's own reference */
+  assert((old & ES_CELL_LEASE_MASK) != ES_CELL_LEASE_MASK);
+  if (old & ES_CELL_DEAD) {
+    /* the chunk is gone: give back the lease and the entry's reference */
+    uint64_t now = __atomic_sub_fetch(&(cell->state), ES_CELL_LEASE + ES_CELL_REF, __ATOMIC_SEQ_CST);
+    if (0 == (now & ~ES_CELL_DEAD))
+      ES_freeCell(s, cell);
+    return FALSE;
+  }
+  return TRUE;
+}
+
+void ES_release(__attribute__((unused)) GC_state s, ES_cell cell, bool dropRef) {
+  LOCAL_USED_FOR_ASSERT uint64_t now =
+    __atomic_sub_fetch(&(cell->state), ES_CELL_LEASE + (dropRef ? ES_CELL_REF : 0), __ATOMIC_SEQ_CST);
+  /* the chunk cannot die under a lease (invariant 4), so it still holds its
+   * reference and the cell cannot be freed here */
+  assert(!(now & ES_CELL_DEAD));
+  assert(ES_CELL_REFS(now) >= 1);
+}
+
+void ES_chunkDying(GC_state s, HM_chunk chunk) {
+  ES_cell cell = __atomic_load_n(&(chunk->suspectCell), __ATOMIC_ACQUIRE);
+  if (NULL == cell)
+    return;
+
+  size_t tries = 0;
+  uint64_t state = __atomic_load_n(&(cell->state), __ATOMIC_ACQUIRE);
+  while (TRUE) {
+    assert(!(state & ES_CELL_DEAD));   /* a chunk dies once */
+    assert(ES_CELL_REFS(state) >= 1);  /* the chunk's reference */
+    if (state & ES_CELL_LEASE_MASK) {
+      /* an entry of this chunk is in use (a header read and one CAS): wait */
+      s->cumulativeStatistics->numSuspectCellLeaseWaits++;
+      tries++;
+      if (tries > 100) sched_yield();
+      state = __atomic_load_n(&(cell->state), __ATOMIC_ACQUIRE);
+      continue;
+    }
+    uint64_t dead = (state | ES_CELL_DEAD) - ES_CELL_REF;
+    if (__atomic_compare_exchange_n(&(cell->state), &state, dead, FALSE,
+                                    __ATOMIC_SEQ_CST, __ATOMIC_ACQUIRE)) {
+      s->cumulativeStatistics->numChunksFreedWithSuspectCell++;
+      if (ES_CELL_REFS(dead) > 0) {
+        /* entries still point into this chunk: each one is dropped at its
+         * next use */
+        s->cumulativeStatistics->numChunksFreedWithSuspectEntries++;
+        s->cumulativeStatistics->numSuspectEntriesOutlivedChunk += ES_CELL_REFS(dead);
+      } else {
+        ES_freeCell(s, cell);
+      }
+      break;
+    }
+  }
+  __atomic_store_n(&(chunk->suspectCell), NULL, __ATOMIC_RELEASE);
+}
+
+/* ======================================================================== */
+
 static inline bool suspicious_header(GC_header h) {
   return (1 == ((h & SUSPECT_MASK) >> SUSPECT_SHIFT));
 }

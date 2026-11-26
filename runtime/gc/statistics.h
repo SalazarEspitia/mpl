@@ -73,6 +73,18 @@ struct GC_cumulativeStatistics {
   uintmax_t numChecksSkipped;
   uintmax_t numSuspectsMarked;
   uintmax_t numSuspectsCleared;
+  /* PROTOTYPE: weak cells (entanglement-suspects.h) */
+  uintmax_t numSuspectCellsAllocated;
+  uintmax_t numSuspectCellsFreed;
+  uintmax_t numSuspectCellLeaseWaits;          /* retries of a chunk free while an entry of the chunk was in use */
+  uintmax_t numChunksFreedWithSuspectCell;
+  uintmax_t numChunksFreedWithSuspectEntries;  /* ... while entries still pointed into the chunk */
+  uintmax_t numSuspectEntriesOutlivedChunk;    /* those entries */
+  uintmax_t numSuspectsDroppedDeadClear;       /* entries dropped because their chunk was gone: clear at a join */
+  uintmax_t numSuspectsDroppedDeadParClear;    /* ... parallel clear at a join */
+  uintmax_t numSuspectsDroppedDeadLGC;         /* ... a local collection's pass over the suspects in its scope */
+  uintmax_t numSuspectsDroppedForwardedClear;    /* entries dropped in a live chunk at a forwarding pointer: clear at a join */
+  uintmax_t numSuspectsDroppedForwardedParClear; /* ... parallel clear at a join */
   uintmax_t bytesPinnedEntangled;
   uintmax_t currentPhaseBytesPinnedEntangled;
   uintmax_t bytesPinnedEntangledWatermark;

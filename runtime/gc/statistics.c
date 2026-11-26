@@ -76,6 +76,17 @@ struct GC_cumulativeStatistics *newCumulativeStatistics(void) {
   cumulativeStatistics->numChecksSkipped = 0;
   cumulativeStatistics->numSuspectsMarked = 0;
   cumulativeStatistics->numSuspectsCleared = 0;
+  cumulativeStatistics->numSuspectCellsAllocated = 0;
+  cumulativeStatistics->numSuspectCellsFreed = 0;
+  cumulativeStatistics->numSuspectCellLeaseWaits = 0;
+  cumulativeStatistics->numChunksFreedWithSuspectCell = 0;
+  cumulativeStatistics->numChunksFreedWithSuspectEntries = 0;
+  cumulativeStatistics->numSuspectEntriesOutlivedChunk = 0;
+  cumulativeStatistics->numSuspectsDroppedDeadClear = 0;
+  cumulativeStatistics->numSuspectsDroppedDeadParClear = 0;
+  cumulativeStatistics->numSuspectsDroppedDeadLGC = 0;
+  cumulativeStatistics->numSuspectsDroppedForwardedClear = 0;
+  cumulativeStatistics->numSuspectsDroppedForwardedParClear = 0;
   cumulativeStatistics->bytesPinnedEntangled = 0;
   cumulativeStatistics->currentPhaseBytesPinnedEntangled = 0;
   cumulativeStatistics->bytesPinnedEntangledWatermark = 0;
