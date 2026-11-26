@@ -77,15 +77,33 @@ static void rotateAndReclaim(GC_state s, EBR_shared ebr)
   HM_initChunkList(limboBag); // clear it out
 }
 
+/* Give each EBR block cache lines of its own. malloc aligns to 16 bytes
+ * only, so the shared struct (its epoch is read at every leave) can share a
+ * line with the start of the announcement array (processor 0 writes its slot
+ * at every enter and leave), and the per-processor locals, declared
+ * aligned(128), can share lines with their neighbours (checkNext is written
+ * at every leave). Where they land depends on the earlier allocations, so on
+ * the build and the number of processors. 128 bytes: two lines, for the
+ * adjacent-line prefetcher. */
+#define EBR_ALIGN 128
+static void *ebrAlignedAlloc(size_t size)
+{
+  void *p = NULL;
+  size_t rounded = (size + EBR_ALIGN - 1) & ~((size_t)EBR_ALIGN - 1);
+  if (0 != posix_memalign(&p, EBR_ALIGN, rounded))
+    DIE("EBR: posix_memalign of %zu bytes failed", rounded);
+  return p;
+}
+
 EBR_shared EBR_new(GC_state s, EBR_freeRetiredObj freeFun)
 {
-  EBR_shared ebr = malloc(sizeof(struct EBR_shared));
+  EBR_shared ebr = ebrAlignedAlloc(sizeof(struct EBR_shared));
 
   ebr->epoch = 0;
   ebr->announce =
-      malloc(s->numberOfProcs * ANNOUNCEMENT_PADDING * sizeof(size_t));
+      ebrAlignedAlloc(s->numberOfProcs * ANNOUNCEMENT_PADDING * sizeof(size_t));
   ebr->local =
-      malloc(s->numberOfProcs * sizeof(struct EBR_local));
+      ebrAlignedAlloc(s->numberOfProcs * sizeof(struct EBR_local));
   ebr->freeFun = freeFun;
 
   for (uint32_t i = 0; i < s->numberOfProcs; i++)
