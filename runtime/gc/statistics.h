@@ -85,6 +85,7 @@ struct GC_cumulativeStatistics {
   uintmax_t numSuspectsDroppedDeadLGC;         /* ... a local collection's pass over the suspects in its scope */
   uintmax_t numSuspectsDroppedForwardedClear;    /* entries dropped in a live chunk at a forwarding pointer: clear at a join */
   uintmax_t numSuspectsDroppedForwardedParClear; /* ... parallel clear at a join */
+  uintmax_t numSuspectsPinnedInChunkLGCFrees;  /* debug runtime only: pinned, uncopied suspects in a chunk a local collection frees */
   uintmax_t bytesPinnedEntangled;
   uintmax_t currentPhaseBytesPinnedEntangled;
   uintmax_t bytesPinnedEntangledWatermark;

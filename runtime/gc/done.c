@@ -133,6 +133,10 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
   fprintf (out, "suspect entries dropped forwarded: clear %"PRIuMAX", parallel clear %"PRIuMAX"\n",
            cumulativeStatistics->numSuspectsDroppedForwardedClear,
            cumulativeStatistics->numSuspectsDroppedForwardedParClear);
+#if ASSERT
+  fprintf (out, "suspects pinned in a chunk a local collection frees (debug runtime): %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectsPinnedInChunkLGCFrees);
+#endif
 }
 
 static void displayCumulativeStatisticsJSON (FILE *out, GC_state s) {

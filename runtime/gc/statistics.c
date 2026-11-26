@@ -87,6 +87,7 @@ struct GC_cumulativeStatistics *newCumulativeStatistics(void) {
   cumulativeStatistics->numSuspectsDroppedDeadLGC = 0;
   cumulativeStatistics->numSuspectsDroppedForwardedClear = 0;
   cumulativeStatistics->numSuspectsDroppedForwardedParClear = 0;
+  cumulativeStatistics->numSuspectsPinnedInChunkLGCFrees = 0;
   cumulativeStatistics->bytesPinnedEntangled = 0;
   cumulativeStatistics->currentPhaseBytesPinnedEntangled = 0;
   cumulativeStatistics->bytesPinnedEntangledWatermark = 0;

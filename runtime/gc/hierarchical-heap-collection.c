@@ -1192,6 +1192,21 @@ void copySuspect(
   }
   else
   {
+#if ASSERT
+    /* Safe drops could hide a pin bug: a pinned suspect, not copied, in a
+     * chunk this collection is about to free (MPLLang/mpl#260's stale pins:
+     * pin bits left on an object that no remembered-set entry reaches). The
+     * entry will die with the chunk; count it, so such objects stay visible.
+     * Exact here: under the lease the chunk is live. */
+    HM_chunk chunk = HM_getChunkOf(p);
+    if (isPinned(op) && !chunk->pinnedDuringCollection && NULL != chunk->levelHead) {
+      HM_HierarchicalHeap chunkHH = HM_getLevelHead(chunk);
+      uint32_t chunkDepth = HM_HH_getDepth(chunkHH);
+      if (chunkDepth >= args->minDepth && chunkDepth <= args->maxDepth
+          && args->fromSpace[chunkDepth] == chunkHH)
+        s->cumulativeStatistics->numSuspectsPinnedInChunkLGCFrees++;
+    }
+#endif
     ES_release(s, entry.cell, FALSE);
   }
   uint32_t opDepth = args->toDepth;

@@ -75,6 +75,13 @@ bool ES_lease(GC_state s, objptr op, ES_cell cell);
 /* Give a lease back; with dropRef, the entry's reference too (the entry is
  * being discarded). */
 void ES_release(GC_state s, ES_cell cell, bool dropRef);
+#if ASSERT
+/* Debug runtime: check every entry of a suspect list. Each cell must be
+ * valid memory holding at least this entry's reference (invariant 1), and,
+ * if it is not dead, be the cell of the entry's chunk, which must be a live
+ * chunk (invariant 2). Takes and returns a lease per entry; drops nothing. */
+void ES_assertListInvariants(HM_chunkList list);
+#endif
 /* From HM_freeChunkWithInfo, for a chunk with a cell: wait out any lease,
  * mark the cell dead and drop the chunk's reference. */
 void ES_chunkDying(GC_state s, HM_chunk chunk);
