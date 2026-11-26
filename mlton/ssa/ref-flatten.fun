@@ -422,6 +422,19 @@ fun transform2 (program as Program.T {datatypes, functions, globals, main}) =
                            | _ => Error.bug "RefFlatten.deWeak")
           | Value.Weak {arg, ...} => arg
           | _ => Error.bug "RefFlatten.deWeak"
+      fun select {base, offset} =
+         let
+            datatype z = datatype Value.value
+         in
+            case Value.value base of
+               Ground t =>
+                  (case Type.dest t of
+                      Type.Object {args, ...} =>
+                         typeValue (Prod.elt (args, offset))
+                    | _ => Error.bug "RefFlatten.select: Ground")
+             | Object ob => Object.select (ob, offset)
+             | _ => Error.bug "RefFlatten.select"
+         end
       fun primApp {args, prim, resultVar = _, resultType} =
          let
             fun weak v =
@@ -436,17 +449,24 @@ fun transform2 (program as Program.T {datatypes, functions, globals, main}) =
             fun equal () =
                (Value.unify (arg 0, arg 1)
                 ; result ())
+            (* A CAS reads and writes a pointer in the field at offset 0 of
+             * arg 0, and returns that field's old contents. So, as in
+             * DeepFlatten, the contents mustn't be flattened into the ref or
+             * array, and the expected and new values must share the contents'
+             * representation.
+             *)
+            fun cas {old, new} =
+               let
+                  val c = select {base = arg 0, offset = 0}
+               in
+                  Value.dontFlatten c
+                  ; Value.unify (old, c)
+                  ; Value.unify (new, c)
+                  ; c
+               end
          in
             case prim of
-               Prim.Array_cas _ =>
-                 let
-                   val r1 = arg 2
-                   val r2 = arg 3
-                 in
-                   Value.dontFlatten r1;
-                   Value.dontFlatten r2;
-                   result ()
-                 end
+               Prim.Array_cas _ => cas {old = arg 2, new = arg 3}
              | Prim.Array_toArray =>
                   let
                      val res = result ()
@@ -491,9 +511,11 @@ fun transform2 (program as Program.T {datatypes, functions, globals, main}) =
              | Prim.MLton_size => dontFlatten ()
              | Prim.MLton_share => dontFlatten ()
              | Prim.Ref_cas _ =>
-                 let val a = arg 0
-                 in (Value.dontFlatten a; result ())
-                 end
+                  (* The lowering addresses the field at offset 0 of the ref's
+                   * own object, so the ref itself mustn't be flattened either.
+                   *)
+                  (Value.dontFlatten (arg 0)
+                   ; cas {old = arg 1, new = arg 2})
              | Prim.Weak_get => deWeak (arg 0)
              | Prim.Weak_new =>
                   let val a = arg 0
@@ -505,19 +527,6 @@ fun transform2 (program as Program.T {datatypes, functions, globals, main}) =
          case b of
             Base.Object obj => obj
           | Base.SequenceSub {sequence, ...} => sequence
-      fun select {base, offset} =
-         let
-            datatype z = datatype Value.value
-         in
-            case Value.value base of
-               Ground t =>
-                  (case Type.dest t of
-                      Type.Object {args, ...} =>
-                         typeValue (Prod.elt (args, offset))
-                    | _ => Error.bug "RefFlatten.select: Ground")
-             | Object ob => Object.select (ob, offset)
-             | _ => Error.bug "RefFlatten.select"
-         end
       fun update {base, offset, value, writeBarrier = _} =
          (coerce {from = value,
                   to = select {base = base, offset = offset}}
