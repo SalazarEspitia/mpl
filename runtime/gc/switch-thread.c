@@ -69,6 +69,7 @@ void handOverHeapBeforeBoot(
   if (from == to)
     return;
   assert(NULL == to->hierarchicalHeap);
+  assert(NULL == to->currentChunk);
 #if ASSERT && defined(DETECT_ENTANGLEMENT)
   /* No fork has happened yet, so every thread's sync depths are still
    * zero and need no copy. The checker's state does move: the original
