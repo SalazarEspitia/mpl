@@ -114,6 +114,25 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
            uintmaxToCommaString (cumulativeStatistics->bytesReclaimedByCC));
   fprintf (out, "max stack size: %s bytes\n",
            uintmaxToCommaString (cumulativeStatistics->maxStackSize));
+  /* PROTOTYPE: weak cells (entanglement-suspects.h) */
+  fprintf (out, "suspects: marked %"PRIuMAX", cleared %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectsMarked,
+           cumulativeStatistics->numSuspectsCleared);
+  fprintf (out, "suspect cells: allocated %"PRIuMAX", freed %"PRIuMAX", lease waits %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectCellsAllocated,
+           cumulativeStatistics->numSuspectCellsFreed,
+           cumulativeStatistics->numSuspectCellLeaseWaits);
+  fprintf (out, "suspect chunks freed: with a cell %"PRIuMAX", with entries outstanding %"PRIuMAX" (%"PRIuMAX" entries)\n",
+           cumulativeStatistics->numChunksFreedWithSuspectCell,
+           cumulativeStatistics->numChunksFreedWithSuspectEntries,
+           cumulativeStatistics->numSuspectEntriesOutlivedChunk);
+  fprintf (out, "suspect entries dropped dead: clear %"PRIuMAX", parallel clear %"PRIuMAX", local collection %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectsDroppedDeadClear,
+           cumulativeStatistics->numSuspectsDroppedDeadParClear,
+           cumulativeStatistics->numSuspectsDroppedDeadLGC);
+  fprintf (out, "suspect entries dropped forwarded: clear %"PRIuMAX", parallel clear %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectsDroppedForwardedClear,
+           cumulativeStatistics->numSuspectsDroppedForwardedParClear);
 }
 
 static void displayCumulativeStatisticsJSON (FILE *out, GC_state s) {
