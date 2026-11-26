@@ -122,8 +122,9 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
    * and dropped on another; so are cells); the sums over processors do:
    * marked = bits cleared + dropped dead + dropped forwarded + entries still
    * in lists at exit. */
-  fprintf (out, "suspects: marked %"PRIuMAX", entries visited by clears %"PRIuMAX", bits cleared %"PRIuMAX"\n",
+  fprintf (out, "suspects: marked %"PRIuMAX", marked by entangled reads %"PRIuMAX", entries visited by clears %"PRIuMAX", bits cleared %"PRIuMAX"\n",
            cumulativeStatistics->numSuspectsMarked,
+           cumulativeStatistics->numSuspectsMarkedEntangled,
            cumulativeStatistics->numSuspectsCleared,
            cumulativeStatistics->numSuspectBitsCleared);
   fprintf (out, "suspect cells: allocated %"PRIuMAX", freed %"PRIuMAX", lost install races %"PRIuMAX", chunk frees that waited for a lease %"PRIuMAX", lease wait retries %"PRIuMAX"\n",

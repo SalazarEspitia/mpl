@@ -75,6 +75,7 @@ struct GC_cumulativeStatistics *newCumulativeStatistics(void) {
   cumulativeStatistics->numEntanglements = 0;
   cumulativeStatistics->numChecksSkipped = 0;
   cumulativeStatistics->numSuspectsMarked = 0;
+  cumulativeStatistics->numSuspectsMarkedEntangled = 0;
   cumulativeStatistics->numSuspectsCleared = 0;
   cumulativeStatistics->numSuspectCellsAllocated = 0;
   cumulativeStatistics->numSuspectCellsFreed = 0;

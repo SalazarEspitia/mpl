@@ -139,7 +139,9 @@ typedef struct ES_finishedClearSetGrain {
 
 bool ES_mark(__attribute__((unused)) GC_state s, objptr op);
 
-void ES_add(GC_state s, HM_chunkList es, objptr op);
+/* True if this call marked op and made its entry (false: op was a suspect
+ * already). */
+bool ES_add(GC_state s, HM_chunkList es, objptr op);
 
 bool ES_contains(HM_chunkList es, objptr op);
 
