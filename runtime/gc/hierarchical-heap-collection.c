@@ -1215,6 +1215,9 @@ objptr relocateObject(
       &copyBytes,
       &metaDataBytes
     );
+  if (WEAK_TAG == tag && !(NULL != args->otherRootHeaps))
+    die(__FILE__ ":%d: relocateObject() does not support WEAK_TAG objects!",
+        __LINE__);
 
   if (!HM_getChunkOf(p)->mightContainMultipleObjects)
   {
@@ -1508,12 +1511,16 @@ void addEntangledToRemSet(
     size_t copyBytes;
 
     /* compute object size and bytes to be copied */
-    computeObjectCopyParameters(s,
-                                header,
-                                p,
-                                &objectBytes,
-                                &copyBytes,
-                                &metaDataBytes);
+    GC_objectTypeTag tag =
+      computeObjectCopyParameters(s,
+                                  header,
+                                  p,
+                                  &objectBytes,
+                                  &copyBytes,
+                                  &metaDataBytes);
+    if (WEAK_TAG == tag && !(NULL != args->otherRootHeaps))
+      die(__FILE__ ":%d: addEntangledToRemSet() does not support WEAK_TAG objects!",
+          __LINE__);
     args->entangledBytes += copyBytes;
   }
 }
@@ -2123,14 +2130,11 @@ GC_objectTypeTag computeObjectCopyParameters(GC_state s,
 
   /* Compute the space taken by the metadata and object body. */
   if ((NORMAL_TAG == tag) or (WEAK_TAG == tag))
-  { /* Fixed size object. */
-    if (WEAK_TAG == tag)
-    {
-      die(__FILE__ ":%d: "
-                   "computeObjectSizeAndCopySize() #define does not support"
-                   " WEAK_TAG objects!",
-          __LINE__);
-    }
+  { /* Fixed size object. A weak one is sized like a normal one: weak
+     * pointers are unsupported, except in a collection of the root heap
+     * before the scheduler boots, where they are kept as strong ones. The
+     * callers (forwardHHObjptr, relocateObject, addEntangledToRemSet) die on a
+     * weak object anywhere else. */
     *metaDataSize = GC_NORMAL_METADATA_SIZE;
     *objectSize = bytesNonObjptrs + (numObjptrs * OBJPTR_SIZE);
     *copySize = *objectSize;
