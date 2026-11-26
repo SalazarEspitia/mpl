@@ -1254,15 +1254,15 @@ void copySuspect(
      * chunk this collection is about to free (MPLLang/mpl#260's stale pins:
      * pin bits left on an object that no remembered-set entry reaches). The
      * entry will die with the chunk; count it, so such objects stay visible.
-     * Exact here: under the lease the chunk is live. */
+     * Under the lease the chunk is live, but it may be another thread's, or
+     * under a concurrent collection's sweep, which sets its level head to
+     * NULL before freeing it: suspectChunkInFromSpace reads the level head
+     * once. The count is exact for chunks of this collection's from-space,
+     * which only this collection changes. */
     HM_chunk chunk = HM_getChunkOf(p);
-    if (isPinned(op) && !chunk->pinnedDuringCollection && NULL != chunk->levelHead) {
-      HM_HierarchicalHeap chunkHH = HM_getLevelHead(chunk);
-      uint32_t chunkDepth = HM_HH_getDepth(chunkHH);
-      if (chunkDepth >= args->minDepth && chunkDepth <= args->maxDepth
-          && args->fromSpace[chunkDepth] == chunkHH)
-        s->cumulativeStatistics->numSuspectsPinnedInChunkLGCFrees++;
-    }
+    if (isPinned(op) && suspectChunkInFromSpace(chunk, args)
+        && !chunk->pinnedDuringCollection)
+      s->cumulativeStatistics->numSuspectsPinnedInChunkLGCFrees++;
 #endif
     ES_release(s, entry.cell, FALSE);
   }
