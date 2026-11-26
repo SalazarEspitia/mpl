@@ -145,6 +145,9 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
            cumulativeStatistics->numSuspectsDroppedForwardedParClear,
            cumulativeStatistics->numSuspectsDroppedForwardedLGC);
 #if ASSERT
+  if (cumulativeStatistics->numSuspectTestLeaseUses > 0)
+    fprintf (out, "suspect test (debug runtime, MPL_ES_TEST_LEASE_SLEEP): lease sleeps %"PRIuMAX"\n",
+             cumulativeStatistics->numSuspectTestLeaseSleeps);
   fprintf (out, "suspects pinned in a chunk a local collection frees (debug runtime): %"PRIuMAX"\n",
            cumulativeStatistics->numSuspectsPinnedInChunkLGCFrees);
 #endif

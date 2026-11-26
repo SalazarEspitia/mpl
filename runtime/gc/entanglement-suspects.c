@@ -4,8 +4,46 @@
 
 static struct FixedSizeAllocator *ES_cellAllocators = NULL;
 
+#if ASSERT
+/* TEST ONLY (see entanglement-suspects.h): set once, before any processor
+ * uses an entry */
+static unsigned long ES_testLeaseSleepMicros = 0;
+static unsigned long ES_testLeaseSleepEvery = 1;
+static unsigned long ES_testLeaseSleepSites = ES_TEST_SITE_CLEAR | ES_TEST_SITE_PAR_CLEAR;
+
+static void ES_initTestLeaseDelay(void) {
+  const char *v = getenv("MPL_ES_TEST_LEASE_SLEEP");
+  if (NULL == v || 0 == *v)
+    return;
+  unsigned long micros = 0, every = 1, sites = ES_testLeaseSleepSites;
+  int n = sscanf(v, "%lu,%lu,%lu", &micros, &every, &sites);
+  if (n < 1 || 0 == every)
+    DIE("MPL_ES_TEST_LEASE_SLEEP: expected MICROSECONDS[,EVERY[,SITES]], got \"%s\"", v);
+  ES_testLeaseSleepMicros = micros;
+  ES_testLeaseSleepEvery = every;
+  ES_testLeaseSleepSites = sites;
+  fprintf(stderr, "MPL_ES_TEST_LEASE_SLEEP: %lu microseconds under a lease, every %lu uses, sites %lu\n",
+          micros, every, sites);
+}
+
+/* called with a lease held */
+void ES_testLeaseDelay(GC_state s, unsigned int site) {
+  if (0 == ES_testLeaseSleepMicros || !(ES_testLeaseSleepSites & site))
+    return;
+  if (0 != (++(s->cumulativeStatistics->numSuspectTestLeaseUses)) % ES_testLeaseSleepEvery)
+    return;
+  s->cumulativeStatistics->numSuspectTestLeaseSleeps++;
+  struct timespec t = {.tv_sec = (time_t)(ES_testLeaseSleepMicros / 1000000),
+                       .tv_nsec = (long)(ES_testLeaseSleepMicros % 1000000) * 1000};
+  nanosleep(&t, NULL);
+}
+#endif
+
 void ES_initCellAllocators(GC_state s) {
   assert(NULL == ES_cellAllocators);
+#if ASSERT
+  ES_initTestLeaseDelay();
+#endif
   ES_cellAllocators = malloc(s->numberOfProcs * sizeof(struct FixedSizeAllocator));
   if (NULL == ES_cellAllocators)
     DIE("Out of memory. Unable to allocate the suspect cell allocators.");
@@ -242,6 +280,8 @@ void clear_suspect(
     eargs->numDropped++;
     return;
   }
+
+  ES_testLeaseDelay(s, ES_TEST_SITE_CLEAR);
 
   /* Under the lease the chunk is live: the word is the object's header, or
    * its forwarding pointer if a local collection copied the object without
@@ -484,6 +524,7 @@ void clear_suspect_par_safe(
     s->cumulativeStatistics->numSuspectsDroppedDeadParClear++;
     return;
   }
+  ES_testLeaseDelay(s, ES_TEST_SITE_PAR_CLEAR);
 
   while (TRUE) {
     GC_header header = getHeader(p);

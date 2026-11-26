@@ -1208,6 +1208,7 @@ void copySuspect(
     s->cumulativeStatistics->numSuspectsDroppedDeadLGC++;
     return;
   }
+  ES_testLeaseDelay(s, ES_TEST_SITE_LGC);
   /* under the lease: the word is the object's header or a forwarding pointer
    * (read once) */
   GC_header header = getHeader(p);

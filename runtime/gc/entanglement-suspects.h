@@ -91,6 +91,23 @@ void ES_release(GC_state s, ES_cell cell, bool dropRef);
  * chunk (invariant 2). Takes and returns a lease per entry; drops nothing. */
 void ES_assertListInvariants(HM_chunkList list);
 #endif
+/* TEST ONLY, debug runtime only: the chunk free's wait for a lease
+ * (ES_chunkDying) is a window of a header read and one CAS, which ordinary
+ * runs do not hit. With the environment variable
+ *   MPL_ES_TEST_LEASE_SLEEP="MICROSECONDS[,EVERY[,SITES]]"
+ * a use of an entry sleeps MICROSECONDS while it holds its lease, at every
+ * EVERY-th use (default 1) on each processor, at the sites in the bit set
+ * SITES (1 the clear at a join, 2 the parallel clear, 4 the local
+ * collection's pass; default 3). gc-summary prints the sleeps taken. Unset,
+ * and in the release runtime, it does nothing. */
+#define ES_TEST_SITE_CLEAR 1
+#define ES_TEST_SITE_PAR_CLEAR 2
+#define ES_TEST_SITE_LGC 4
+#if ASSERT
+void ES_testLeaseDelay(GC_state s, unsigned int site);
+#else
+#define ES_testLeaseDelay(s, site) ((void)0)
+#endif
 /* From HM_freeChunkWithInfo, for a chunk with a cell: wait out any lease,
  * mark the cell dead and drop the chunk's reference. */
 void ES_chunkDying(GC_state s, HM_chunk chunk);
