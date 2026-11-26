@@ -74,9 +74,11 @@ struct checkDEDepthsArgs
 
 #if (defined(MLTON_GC_INTERNAL_FUNCS))
 /**
- * This function performs a local collection on the current hierarchical heap
+ * This function performs a local collection on the current hierarchical heap.
+ * rootHeap: HM_HH_canCollectRootHeap of the current thread, computed by the
+ * caller.
  */
-void HM_HHC_collectLocal(uint32_t desiredScope);
+void HM_HHC_collectLocal(uint32_t desiredScope, bool rootHeap);
 
 /**
  * Forwards the object pointed to by 'opp' into 'destinationLevelList' starting

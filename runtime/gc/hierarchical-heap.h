@@ -152,7 +152,11 @@ void HM_HH_updateValues(GC_thread thread, pointer frontier);
 size_t HM_HH_nextCollectionThreshold(GC_state s, size_t survivingSize);
 size_t HM_HH_addRecentBytesAllocated(GC_thread thread, size_t bytes);
 
-uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread);
+/* rootHeap: HM_HH_canCollectRootHeap(s, thread), computed by the caller. */
+uint32_t HM_HH_desiredCollectionScope(
+  GC_state s,
+  GC_thread thread,
+  bool rootHeap);
 
 /* TRUE until the scheduler's boot (see hierarchical-heap.c), which
  * GC_HH_setDepth notes. */

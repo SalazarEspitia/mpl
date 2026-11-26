@@ -196,7 +196,7 @@ uint32_t minDepthWithoutCC(GC_thread thread)
   return HM_HH_getDepth(cursor);
 }
 
-void HM_HHC_collectLocal(uint32_t desiredScope)
+void HM_HHC_collectLocal(uint32_t desiredScope, bool rootHeap)
 {
   GC_state s = pthread_getspecific(gcstate_key);
   GC_thread thread = getThreadCurrent(s);
@@ -228,8 +228,8 @@ void HM_HHC_collectLocal(uint32_t desiredScope)
    * root heap can be collected like a leaf heap (HM_HH_canCollectRootHeap),
    * with no other heap to trace. Depth 0 needs the full root set: the
    * globals, which hold the statics copied in by initWorld, and the threads
-   * in GC_state. */
-  bool rootHeap = HM_HH_canCollectRootHeap(s, thread);
+   * in GC_state. The caller computed the test (rootHeap). */
+  assert(rootHeap == HM_HH_canCollectRootHeap(s, thread));
 
   if (!rootHeap &&
       (s->wsQueueTop == BOGUS_OBJPTR || s->wsQueueBot == BOGUS_OBJPTR))
