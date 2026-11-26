@@ -31,23 +31,27 @@ start. The last two are separate.
 
 `.github/workflows/linux-evidence.yml` runs on every push to this branch:
 
-1. **build**: one job per build and platform. `common/build.sh` fetches the commit and builds it the way
-   upstream's `ci.yml` does on Linux (`apt-get install mlton libgmp-dev gcc make`, then `make --silent`), and the
-   way the README says on macOS (`brew install mlton make gmp`, then `gmake WITH_GMP_DIR=$(brew --prefix gmp)`;
-   upstream's CI has no Mac job). Builds are cached by commit and platform, so a later push only reruns the tests.
-2. **finding**: one job per finding and platform. It restores the builds it needs, runs the folder's `run.sh`,
-   writes the table to the job's summary, and uploads `results.md`, the per-run table and every run's output as
-   an artifact.
+1. **build**: `common/build.sh` fetches each commit and builds it the way upstream's `ci.yml` does on Linux
+   (`apt-get install mlton libgmp-dev gcc make`, then `make --silent`), and the way the README says on macOS
+   (`brew install mlton make gmp`, then `gmake WITH_GMP_DIR=$(brew --prefix gmp)`; upstream's CI has no Mac
+   job). Builds are cached by commit and platform, so a later push only reruns the tests.
+2. **finding**: restores the builds it needs, runs the folder's `run.sh`, writes the table to the job's
+   summary, and uploads `results.md`, the per-run table and every run's output as an artifact.
 3. **results by platform**: collects every platform's results and writes one table per finding with a column
    per platform (`common/combine.sh`), in the run's summary and as the artifact `results-combined`.
 
 The platforms:
 
-- `ubuntu-latest`: Linux x86-64, 4 cores. The main evidence.
-- `ubuntu-24.04-arm`: Linux on Arm, 4 cores. MPL's README doesn't name this platform and I hadn't tested it, so
-  its jobs are allowed to fail (the build may not work there). If it runs, it shows Linux's heap placement
-  together with Arm's weaker memory ordering.
-- `macos-latest`: macOS arm64, 3 cores, so the scripts use 2 and 3 processors there instead of 2 and 4.
+- `ubuntu-latest`: Linux x86-64, 4 cores. The main evidence. One job per build and one per finding, in
+  parallel.
+- `ubuntu-24.04-arm`: Linux on Arm, 4 cores, the same jobs. MPL's README doesn't name this platform and I
+  hadn't tested it, so its jobs are allowed to fail. Ubuntu has no arm64 package of MLton, so there MLton comes
+  from MLton's own release (`mlton-20241230-1.arm64-linux.ubuntu-24.04-arm_glibc2.39.tgz`), unpacked and put on
+  the `PATH`. If it runs, it shows Linux's heap placement together with Arm's weaker memory ordering.
+- `macos-latest`: macOS arm64, 3 cores, so the scripts use 2 and 3 processors there instead of 2 and 4. It
+  runs as two jobs, one that builds every commit and one that runs every finding, each one after the other:
+  GitHub runs only a few macOS jobs at a time, and with one job per build and finding most of them waited in
+  the queue until they were cancelled.
 
 Windows is left out: MPL supports Linux and macOS only, and on Windows it runs in WSL2, which is Linux.
 

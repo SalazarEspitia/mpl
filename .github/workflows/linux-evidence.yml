@@ -3,6 +3,10 @@ name: Linux evidence
 # Builds MPL at each commit the pack uses, on each platform, then runs each finding and puts the results
 # in the run's summary: one table per finding and platform, and at the end one table per finding with a
 # column per platform. Reruns happen by pushing to this branch.
+#
+# Linux: one job per build and one per finding, in parallel. macOS: two jobs in all (every build, then every
+# finding, one after the other), because GitHub runs only a few macOS jobs at a time and the rest wait
+# in the queue until they are cancelled.
 
 on:
   push:
@@ -26,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
         ref: [base, weak, weak0, hint, main, ebr]
     steps:
       - name: Checkout the pack
@@ -46,15 +50,31 @@ jobs:
           path: .builds/${{ steps.ref.outputs.commit }}
           key: mpl-${{ matrix.os }}-${{ steps.ref.outputs.image }}-${{ runner.arch }}-${{ steps.ref.outputs.commit }}
 
-      - name: Install dependencies (Linux, as upstream's ci.yml)
-        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
+      - name: Install dependencies (Linux x86-64, as upstream's ci.yml)
+        if: steps.cache.outputs.cache-hit != 'true' && runner.arch == 'X64'
         run: |
           sudo apt-get update
           sudo apt-get install -y mlton libgmp-dev gcc make
 
-      - name: Install dependencies (macOS, as upstream's README)
-        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
-        run: brew install mlton make gmp
+      # Ubuntu has no arm64 package of MLton, so on Arm it comes from MLton's own release.
+      - name: Install dependencies (Linux Arm, MLton from its release)
+        if: steps.cache.outputs.cache-hit != 'true' && runner.arch == 'ARM64'
+        env:
+          MLTON_URL: https://github.com/MLton/mlton/releases/download/on-20241230-release/mlton-20241230-1.arm64-linux.ubuntu-24.04-arm_glibc2.39.tgz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgmp-dev gcc make
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/mlton.tgz" "$MLTON_URL"
+          mkdir -p "$RUNNER_TEMP/mlton"
+          tar -xzf "$RUNNER_TEMP/mlton.tgz" -C "$RUNNER_TEMP/mlton" --strip-components=1
+          for t in mlton mllex mlyacc; do
+            if [ ! -x "$RUNNER_TEMP/mlton/bin/$t" ]; then
+              echo "::error::no bin/$t in MLton's release archive; its layout:"
+              find "$RUNNER_TEMP/mlton" -maxdepth 2 | head -40
+              exit 1
+            fi
+          done
+          echo "$RUNNER_TEMP/mlton/bin" >> "$GITHUB_PATH"
 
       - name: Build
         if: steps.cache.outputs.cache-hit != 'true'
@@ -65,6 +85,49 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log-${{ matrix.ref }}-${{ matrix.os }}
+          path: .builds/*.build.log
+          if-no-files-found: ignore
+
+  build-macos:
+    name: build all (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout the pack
+        uses: actions/checkout@v4
+
+      - name: Find the image
+        id: ref
+        run: echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+
+      # One cache for the six builds. After a change of common/refs.sh the previous cache is restored and
+      # build.sh rebuilds only the commits that are not in it.
+      - name: Cache the builds
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: .builds
+          key: mpl-macos-latest-${{ steps.ref.outputs.image }}-${{ runner.arch }}-${{ hashFiles('common/refs.sh') }}
+          restore-keys: |
+            mpl-macos-latest-${{ steps.ref.outputs.image }}-${{ runner.arch }}-
+
+      - name: Install dependencies (macOS, as upstream's README)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: brew install mlton make gmp
+
+      - name: Build every commit, one after the other
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          . common/refs.sh
+          for n in base weak weak0 hint main ebr; do
+            JOBS=3 common/build.sh "$n" ".builds/$(ref_commit "$n")"
+          done
+
+      - name: Upload the build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-macos-latest
           path: .builds/*.build.log
           if-no-files-found: ignore
 
@@ -79,7 +142,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
         finding: [stale-suspects, parallel-clear, heap-placement, ebr-false-sharing, write-barrier-depth]
         include:
           - finding: stale-suspects
@@ -155,15 +218,10 @@ jobs:
             fi
           done
 
-      - name: Install what compiled programs need (Linux)
-        if: runner.os == 'Linux'
+      - name: Install what compiled programs need
         run: |
           sudo apt-get update
           sudo apt-get install -y libgmp-dev gcc make binutils
-
-      - name: Install what compiled programs need (macOS)
-        if: runner.os == 'macOS'
-        run: brew install gmp
 
       - name: Run
         run: |
@@ -183,9 +241,127 @@ jobs:
             ${{ matrix.finding }}/out/runs/
           if-no-files-found: warn
 
+  findings-macos:
+    name: all findings (macos-latest)
+    needs: build-macos
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout the pack
+        uses: actions/checkout@v4
+
+      - name: Find the image
+        id: ref
+        run: echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the builds
+        uses: actions/cache/restore@v4
+        with:
+          path: .builds
+          key: mpl-macos-latest-${{ steps.ref.outputs.image }}-${{ runner.arch }}-${{ hashFiles('common/refs.sh') }}
+          fail-on-cache-miss: true
+
+      - name: Check that the builds are there
+        run: |
+          . common/refs.sh
+          for n in base weak weak0 hint main ebr; do
+            if [ ! -x ".builds/$(ref_commit "$n")/bin/mpl" ]; then
+              echo "::error::build $n is missing on macos-latest"
+              exit 1
+            fi
+          done
+
+      - name: Install what compiled programs need
+        id: deps
+        run: brew install gmp
+
+      - name: Run stale-suspects
+        run: ./stale-suspects/run.sh
+
+      - name: Run parallel-clear
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: ./parallel-clear/run.sh
+
+      - name: Run heap-placement
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: ./heap-placement/run.sh
+
+      - name: Run ebr-false-sharing
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: ./ebr-false-sharing/run.sh
+
+      - name: Run write-barrier-depth
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        run: ./write-barrier-depth/run.sh
+
+      - name: Upload the results of stale-suspects
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-stale-suspects-macos-latest
+          path: |
+            stale-suspects/out/results.md
+            stale-suspects/out/results.tsv
+            stale-suspects/out/runs.tsv
+            stale-suspects/out/crashes.txt
+            stale-suspects/out/runs/
+          if-no-files-found: warn
+
+      - name: Upload the results of parallel-clear
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-parallel-clear-macos-latest
+          path: |
+            parallel-clear/out/results.md
+            parallel-clear/out/results.tsv
+            parallel-clear/out/runs.tsv
+            parallel-clear/out/crashes.txt
+            parallel-clear/out/runs/
+          if-no-files-found: warn
+
+      - name: Upload the results of heap-placement
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-heap-placement-macos-latest
+          path: |
+            heap-placement/out/results.md
+            heap-placement/out/results.tsv
+            heap-placement/out/runs.tsv
+            heap-placement/out/crashes.txt
+            heap-placement/out/runs/
+          if-no-files-found: warn
+
+      - name: Upload the results of ebr-false-sharing
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-ebr-false-sharing-macos-latest
+          path: |
+            ebr-false-sharing/out/results.md
+            ebr-false-sharing/out/results.tsv
+            ebr-false-sharing/out/runs.tsv
+            ebr-false-sharing/out/crashes.txt
+            ebr-false-sharing/out/runs/
+          if-no-files-found: warn
+
+      - name: Upload the results of write-barrier-depth
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-write-barrier-depth-macos-latest
+          path: |
+            write-barrier-depth/out/results.md
+            write-barrier-depth/out/results.tsv
+            write-barrier-depth/out/runs.tsv
+            write-barrier-depth/out/crashes.txt
+            write-barrier-depth/out/runs/
+          if-no-files-found: warn
+
   combine:
     name: results by platform
-    needs: finding
+    needs: [finding, findings-macos]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
