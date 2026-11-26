@@ -115,13 +115,23 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
   fprintf (out, "max stack size: %s bytes\n",
            uintmaxToCommaString (cumulativeStatistics->maxStackSize));
   /* PROTOTYPE: weak cells (entanglement-suspects.h) */
-  fprintf (out, "suspects: marked %"PRIuMAX", cleared %"PRIuMAX"\n",
+  /* "entries visited by clears" counts every entry a clear at a join looked
+   * at (an entry moved to a shallower list is counted again later), so it can
+   * exceed "marked"; "bits cleared" counts the clears that succeeded. Per
+   * processor these lines do not balance (an entry is made on one processor
+   * and dropped on another; so are cells); the sums over processors do:
+   * marked = bits cleared + dropped dead + dropped forwarded + entries still
+   * in lists at exit. */
+  fprintf (out, "suspects: marked %"PRIuMAX", entries visited by clears %"PRIuMAX", bits cleared %"PRIuMAX"\n",
            cumulativeStatistics->numSuspectsMarked,
-           cumulativeStatistics->numSuspectsCleared);
-  fprintf (out, "suspect cells: allocated %"PRIuMAX", freed %"PRIuMAX", lease waits %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectsCleared,
+           cumulativeStatistics->numSuspectBitsCleared);
+  fprintf (out, "suspect cells: allocated %"PRIuMAX", freed %"PRIuMAX", lost install races %"PRIuMAX", chunk frees that waited for a lease %"PRIuMAX", lease wait retries %"PRIuMAX"\n",
            cumulativeStatistics->numSuspectCellsAllocated,
            cumulativeStatistics->numSuspectCellsFreed,
-           cumulativeStatistics->numSuspectCellLeaseWaits);
+           cumulativeStatistics->numSuspectCellInstallRaces,
+           cumulativeStatistics->numSuspectCellLeaseWaits,
+           cumulativeStatistics->numSuspectCellLeaseRetries);
   fprintf (out, "suspect chunks freed: with a cell %"PRIuMAX", with entries outstanding %"PRIuMAX" (%"PRIuMAX" entries)\n",
            cumulativeStatistics->numChunksFreedWithSuspectCell,
            cumulativeStatistics->numChunksFreedWithSuspectEntries,

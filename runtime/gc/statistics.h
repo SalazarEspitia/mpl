@@ -72,11 +72,14 @@ struct GC_cumulativeStatistics {
   uintmax_t numEntanglements;         // count instances entanglement is detected
   uintmax_t numChecksSkipped;
   uintmax_t numSuspectsMarked;
-  uintmax_t numSuspectsCleared;
+  uintmax_t numSuspectsCleared;                /* entries visited by the clears at joins: cleared, dropped, moved or failed alike (an entry moved to a shallower list is visited again at a later join) */
+  uintmax_t numSuspectBitsCleared;             /* of those, the entries whose object had its suspect bit cleared */
   /* PROTOTYPE: weak cells (entanglement-suspects.h) */
   uintmax_t numSuspectCellsAllocated;
   uintmax_t numSuspectCellsFreed;
-  uintmax_t numSuspectCellLeaseWaits;          /* retries of a chunk free while an entry of the chunk was in use */
+  uintmax_t numSuspectCellInstallRaces;        /* cells allocated for a chunk's first suspect and discarded: another processor installed the chunk's cell first */
+  uintmax_t numSuspectCellLeaseWaits;          /* chunk frees that had to wait because an entry of the chunk was in use */
+  uintmax_t numSuspectCellLeaseRetries;        /* the retries of those waits, in all */
   uintmax_t numChunksFreedWithSuspectCell;
   uintmax_t numChunksFreedWithSuspectEntries;  /* ... while entries still pointed into the chunk */
   uintmax_t numSuspectEntriesOutlivedChunk;    /* those entries */

@@ -41,6 +41,7 @@ ES_cell ES_cellOf(GC_state s, HM_chunk chunk) {
     return fresh;
 
   /* another processor installed one first; ours was never published */
+  s->cumulativeStatistics->numSuspectCellInstallRaces++;
   __atomic_store_n(&(fresh->state), 0, __ATOMIC_RELAXED);
   ES_freeCell(s, fresh);
   assert(NULL != cell);
@@ -149,7 +150,9 @@ void ES_chunkDying(GC_state s, HM_chunk chunk) {
     assert(ES_CELL_REFS(state) >= 1);  /* the chunk's reference */
     if (state & ES_CELL_LEASE_MASK) {
       /* an entry of this chunk is in use (a header read and one CAS): wait */
-      s->cumulativeStatistics->numSuspectCellLeaseWaits++;
+      if (0 == tries)
+        s->cumulativeStatistics->numSuspectCellLeaseWaits++;
+      s->cumulativeStatistics->numSuspectCellLeaseRetries++;
       tries++;
       if (tries > 100) sched_yield();
       state = __atomic_load_n(&(cell->state), __ATOMIC_ACQUIRE);
@@ -381,7 +384,8 @@ void ES_clear(GC_state s, HM_HierarchicalHeap hh)
 #else
   ES_foreachSuspect(s, &oldList, &fObjptrClosure);
 #endif
-  s->cumulativeStatistics->numSuspectsCleared += numSuspects;
+  s->cumulativeStatistics->numSuspectsCleared += numSuspects; /* visited */
+  s->cumulativeStatistics->numSuspectBitsCleared += eargs.numCleared;
 
   HM_freeChunksInListWithInfo(s, &(oldList), NULL, BLOCK_FOR_SUSPECTS);
 
@@ -506,6 +510,7 @@ void clear_suspect_par_safe(
     if (__sync_bool_compare_and_swap(getHeaderp(p), header, newHeader)) {
       /* clearing successful */
       ES_release(s, entry.cell, TRUE);
+      s->cumulativeStatistics->numSuspectBitsCleared++;
       return;
     }
     else {
@@ -579,7 +584,7 @@ void ES_commitFinishedClearSetGrain(
 
 
 void ES_deleteClearSet(GC_state s, ES_clearSet es) {
-  s->cumulativeStatistics->numSuspectsCleared += es->numSuspects;
+  s->cumulativeStatistics->numSuspectsCleared += es->numSuspects; /* visited */
 
   for (size_t i = 0; i < es->lenChunkArray; i++) {
     HM_freeChunkWithInfo(s, es->chunkArray[i], NULL, BLOCK_FOR_SUSPECTS);
