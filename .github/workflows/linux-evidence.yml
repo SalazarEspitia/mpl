@@ -1,0 +1,209 @@
+name: Linux evidence
+
+# Builds MPL at each commit the pack uses, on each platform, then runs each finding and puts the results
+# in the run's summary: one table per finding and platform, and at the end one table per finding with a
+# column per platform. Reruns happen by pushing to this branch.
+
+on:
+  push:
+    branches: [linux-evidence]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build ${{ matrix.ref }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    # MPL's README names Linux x86-64 and macOS; Linux on Arm is an experiment here, so it may fail.
+    continue-on-error: ${{ matrix.os == 'ubuntu-24.04-arm' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        ref: [base, weak, weak0, hint, main, ebr]
+    steps:
+      - name: Checkout the pack
+        uses: actions/checkout@v4
+
+      - name: Find the commit
+        id: ref
+        run: |
+          . common/refs.sh
+          echo "commit=$(ref_commit '${{ matrix.ref }}')" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the build
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: .builds/${{ steps.ref.outputs.commit }}
+          key: mpl-${{ matrix.os }}-${{ steps.ref.outputs.image }}-${{ runner.arch }}-${{ steps.ref.outputs.commit }}
+
+      - name: Install dependencies (Linux, as upstream's ci.yml)
+        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mlton libgmp-dev gcc make
+
+      - name: Install dependencies (macOS, as upstream's README)
+        if: steps.cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
+        run: brew install mlton make gmp
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: common/build.sh '${{ matrix.ref }}' ".builds/${{ steps.ref.outputs.commit }}"
+
+      - name: Upload the build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.ref }}-${{ matrix.os }}
+          path: .builds/*.build.log
+          if-no-files-found: ignore
+
+  finding:
+    name: ${{ matrix.finding }} (${{ matrix.os }})
+    needs: build
+    # run even if a build failed: each platform's jobs check for the builds they need
+    if: ${{ !cancelled() }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    continue-on-error: ${{ matrix.os == 'ubuntu-24.04-arm' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+        finding: [stale-suspects, parallel-clear, heap-placement, ebr-false-sharing, write-barrier-depth]
+        include:
+          - finding: stale-suspects
+            builds: base weak
+          - finding: parallel-clear
+            builds: base weak
+          - finding: heap-placement
+            builds: hint
+          - finding: ebr-false-sharing
+            builds: main ebr weak0 weak
+          - finding: write-barrier-depth
+            builds: main
+    steps:
+      - name: Checkout the pack
+        uses: actions/checkout@v4
+
+      - name: Find the commits
+        id: ref
+        run: |
+          . common/refs.sh
+          for n in base weak weak0 hint main ebr; do echo "$n=$(ref_commit $n)" >> "$GITHUB_OUTPUT"; done
+          echo "image=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore build base
+        if: contains(format(' {0} ', matrix.builds), ' base ')
+        uses: actions/cache/restore@v4
+        with:
+          path: .builds/${{ steps.ref.outputs.base }}
+          key: mpl-${{ matrix.os }}-${{ steps.ref.outputs.image }}-${{ runner.arch }}-${{ steps.ref.outputs.base }}
+
+      - name: Restore build weak
+        if: contains(format(' {0} ', matrix.builds), ' weak ')
+        uses: actions/cache/restore@v4
+        with:
+          path: .builds/${{ steps.ref.outputs.weak }}
+          key: mpl-${{ matrix.os }}-${{ steps.ref.outputs.image }}-${{ runner.arch }}-${{ steps.ref.outputs.weak }}
+
+      - name: Restore build weak0
+        if: contains(format(' {0} ', matrix.builds), ' weak0 ')
+        uses: actions/cache/restore@v4
+        with:
+          path: .builds/${{ steps.ref.outputs.weak0 }}
+          key: mpl-${{ matrix.os }}-${{ steps.ref.outputs.image }}-${{ runner.arch }}-${{ steps.ref.outputs.weak0 }}
+
+      - name: Restore build hint
+        if: contains(format(' {0} ', matrix.builds), ' hint ')
+        uses: actions/cache/restore@v4
+        with:
+          path: .builds/${{ steps.ref.outputs.hint }}
+          key: mpl-${{ matrix.os }}-${{ steps.ref.outputs.image }}-${{ runner.arch }}-${{ steps.ref.outputs.hint }}
+
+      - name: Restore build main
+        if: contains(format(' {0} ', matrix.builds), ' main ')
+        uses: actions/cache/restore@v4
+        with:
+          path: .builds/${{ steps.ref.outputs.main }}
+          key: mpl-${{ matrix.os }}-${{ steps.ref.outputs.image }}-${{ runner.arch }}-${{ steps.ref.outputs.main }}
+
+      - name: Restore build ebr
+        if: contains(format(' {0} ', matrix.builds), ' ebr ')
+        uses: actions/cache/restore@v4
+        with:
+          path: .builds/${{ steps.ref.outputs.ebr }}
+          key: mpl-${{ matrix.os }}-${{ steps.ref.outputs.image }}-${{ runner.arch }}-${{ steps.ref.outputs.ebr }}
+
+      - name: Check that the builds are there
+        run: |
+          . common/refs.sh
+          for n in ${{ matrix.builds }}; do
+            if [ ! -x ".builds/$(ref_commit "$n")/bin/mpl" ]; then
+              echo "::error::build $n is missing on ${{ matrix.os }} (its build job failed, or the cache was not saved)"
+              exit 1
+            fi
+          done
+
+      - name: Install what compiled programs need (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgmp-dev gcc make binutils
+
+      - name: Install what compiled programs need (macOS)
+        if: runner.os == 'macOS'
+        run: brew install gmp
+
+      - name: Run
+        run: |
+          echo "cores: $(getconf _NPROCESSORS_ONLN); $(uname -srm)"
+          ./${{ matrix.finding }}/run.sh
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ matrix.finding }}-${{ matrix.os }}
+          path: |
+            ${{ matrix.finding }}/out/results.md
+            ${{ matrix.finding }}/out/results.tsv
+            ${{ matrix.finding }}/out/runs.tsv
+            ${{ matrix.finding }}/out/crashes.txt
+            ${{ matrix.finding }}/out/runs/
+          if-no-files-found: warn
+
+  combine:
+    name: results by platform
+    needs: finding
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the pack
+        uses: actions/checkout@v4
+
+      - name: Download every platform's results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: all-results
+
+      - name: One table per finding, one column per platform
+        run: common/combine.sh all-results all-results/combined.md
+
+      - name: Upload the combined table
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-combined
+          path: all-results/combined.md
