@@ -239,10 +239,49 @@ static void setSuperBlockSizeClass(GC_state s, SuperBlock sb, int sizeClass) {
  * aligned start, and unmap the excess on either side. This relies on
  * releasing part of a mapping, which munmap allows (Linux, macOS); at the
  * default block size there's no excess, and nothing is released. */
+/* MEASUREMENT ONLY (heap-address probe for MPLLang/mpl#261, 2026-11-26).
+ * With MPL_HEAP_HINT set to a hex address, every heap mapping is asked for at
+ * consecutive addresses from there, inside one 1 GiB window, so that bit 30
+ * (SUSPECT_MASK) is the same in every heap address: clear for a window that
+ * starts at a multiple of 2 GiB, set for one that starts 1 GiB above. The
+ * kernel may ignore the hint (no MAP_FIXED); the first time it does, or the
+ * window fills up, a line goes to stderr. Unset: as before. */
+static atomic_uintptr_t heapHintNext = 0;
+static uintptr_t heapHintEnd = 0;
+static atomic_int heapHintState = 0;   /* 0 unread, 1 off, 2 on */
+static atomic_int heapHintWarned = 0;
+static void *heapHint(size_t length) {
+  int st = atomic_load(&heapHintState);
+  if (0 == st) {
+    const char *e = getenv("MPL_HEAP_HINT");
+    uintptr_t base = (NULL == e) ? 0 : (uintptr_t)strtoull(e, NULL, 16);
+    uintptr_t expected = 0;
+    atomic_compare_exchange_strong(&heapHintNext, &expected, base);
+    heapHintEnd = base + ((uintptr_t)1 << 30);
+    st = (0 == base) ? 1 : 2;
+    atomic_store(&heapHintState, st);
+    if (2 == st)
+      fprintf(stderr, "heap-hint: mapping the heap from %p (bit 30 %s)\n",
+              (void *)base, (base & ((uintptr_t)1 << 30)) ? "set" : "clear");
+  }
+  if (1 == st)
+    return NULL;
+  uintptr_t h = atomic_fetch_add(&heapHintNext, (uintptr_t)length);
+  if (h + length > heapHintEnd) {
+    if (0 == atomic_exchange(&heapHintWarned, 1))
+      fprintf(stderr, "heap-hint: WINDOW FULL at %p; later mappings are not in the window\n", (void *)h);
+    return NULL;
+  }
+  return (void *)h;
+}
+
 static pointer mmapBlockAligned(GC_state s, size_t length) {
   size_t blockSize = s->controls->blockSize;
   size_t extra = blockSize - s->sysvals.pageSize;
-  pointer p = GC_mmapAnon(NULL, length + extra);
+  void *hint = heapHint(length + extra);
+  pointer p = GC_mmapAnon(hint, length + extra);
+  if (NULL != hint && p != (pointer)hint && 0 == atomic_exchange(&heapHintWarned, 1))
+    fprintf(stderr, "heap-hint: HINT IGNORED: asked %p, got %p\n", hint, (void *)p);
   if (MAP_FAILED == p || 0 == extra)
     return p;
   pointer start = (pointer)(uintptr_t)align((size_t)p, blockSize);
