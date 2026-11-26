@@ -6,14 +6,8 @@
  * See the file MLton-LICENSE for details.
  */
 
-/* Move the heap that `from` runs in to `to`: the heap, the chunk to
- * allocate in, the depth, the allocation counters and the entanglement
- * checker's state. `from` is left with none of them. Before the scheduler's
- * boot the program has one heap, which follows the running thread: the
- * thread switches hand it over (GC_switchToThread, and the switch to a
- * signal handler). A signal handler runs in the interrupted thread's heap
- * the same way (GC_handlerEnterHeapOfThread and ...Leave...). */
-void handOverHeap(GC_thread from, GC_thread to) {
+/* handOverHeap without the entanglement checker's sync depths. */
+static inline void handOverHeapExceptSyncDepths(GC_thread from, GC_thread to) {
   assert(from != to);
   to->currentDepth = from->currentDepth;
   to->currentChunk = from->currentChunk;
@@ -23,9 +17,6 @@ void handOverHeap(GC_thread from, GC_thread to) {
   to->bytesSurvivedLastCollection = from->bytesSurvivedLastCollection;
 #ifdef DETECT_ENTANGLEMENT
   to->decheckState = from->decheckState;
-  memcpy(&(to->decheckSyncDepths[0]),
-         &(from->decheckSyncDepths[0]),
-         DECHECK_DEPTHS_LEN * sizeof(uint32_t));
   from->decheckState = DECHECK_BOGUS_TID;
 #endif
 
@@ -35,8 +26,35 @@ void handOverHeap(GC_thread from, GC_thread to) {
   from->bytesSurvivedLastCollection = 0;
 }
 
+/* Move the heap that `from` runs in to `to`: the heap, the chunk to
+ * allocate in, the depth, the allocation counters and the entanglement
+ * checker's state. `from` is left with none of them. Before the scheduler's
+ * boot the program has one heap, which follows the running thread: the
+ * thread switches hand it over (handOverHeapBeforeBoot). A signal handler
+ * runs in the interrupted thread's heap the same way
+ * (GC_handlerEnterHeapOfThread and ...Leave...). */
+void handOverHeap(GC_thread from, GC_thread to) {
+#ifdef DETECT_ENTANGLEMENT
+  memcpy(&(to->decheckSyncDepths[0]),
+         &(from->decheckSyncDepths[0]),
+         DECHECK_DEPTHS_LEN * sizeof(uint32_t));
+#endif
+  handOverHeapExceptSyncDepths(from, to);
+}
+
+#if ASSERT && defined(DETECT_ENTANGLEMENT)
+static bool syncDepthsAreZero(GC_thread thread) {
+  for (uint32_t i = 0; i < DECHECK_DEPTHS_LEN; i++) {
+    if (0 != thread->decheckSyncDepths[i])
+      return FALSE;
+  }
+  return TRUE;
+}
+#endif
+
 /* Before the scheduler's boot: hand the one heap from the thread that
- * stops running to the thread that runs next, which has none. */
+ * stops running to the thread that runs next, which has none
+ * (GC_switchToThread, and the switch to a signal handler). */
 void handOverHeapBeforeBoot(
   ARG_USED_FOR_ASSERT GC_state s,
   GC_thread from,
@@ -51,7 +69,16 @@ void handOverHeapBeforeBoot(
   if (from == to)
     return;
   assert(NULL == to->hierarchicalHeap);
-  handOverHeap(from, to);
+#if ASSERT && defined(DETECT_ENTANGLEMENT)
+  /* No fork has happened yet, so every thread's sync depths are still
+   * zero and need no copy. The checker's state does move: the original
+   * thread starts with the root's (decheckInit), a thread without the heap
+   * has none. */
+  assert(syncDepthsAreZero(from));
+  assert(syncDepthsAreZero(to));
+  assert(DECHECK_BOGUS_BITS == to->decheckState.bits);
+#endif
+  handOverHeapExceptSyncDepths(from, to);
 }
 
 /* A thread made before the scheduler's boot has no heap of its own: until
