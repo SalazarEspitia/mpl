@@ -32,7 +32,7 @@ for c in "${CELLS[@]}"; do
       ev_run "$b, $lab" ' bad 0$' "$EV_O/bin/t3.$b" @mpl procs "$p" $rts gc-summary -- $args
     done
   done
-  ev_row "base, $lab" "mostly right; on Linux some crashes in the plain rows with 2 or more processors (2 of 6 on our 32-core machine)"
+  ev_row "base, $lab" "mostly right; on Linux some crashes in the plain rows with 2 or more processors (2 of 6 on our 16-core (32-thread) machine)"
   ev_row "weak, $lab" "all right"
 done
 

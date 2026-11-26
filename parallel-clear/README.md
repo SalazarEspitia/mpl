@@ -29,6 +29,6 @@ checks every cell, and prints `bad 0` when they are intact.
   (`@mpl gc-summary`). The table's last row sums, over its runs, the entries the parallel clear found pointing
   into freed chunks or at forwarded objects. Above 0 means the situation arose; the base does a write for each.
   One run of the plain setting at 2 processors drops about 200,000 (Linux and macOS alike).
-- **Crashes.** On Linux (32 cores) the base crashed in 2 of 6 runs of the plain settings with 2 or 4
+- **Crashes.** On Linux (16 cores, 32 threads) the base crashed in 2 of 6 runs of the plain settings with 2 or 4
   processors, in the write barrier, and ran right in the others. Weak cells: all right. On macOS crashes are
   rarer (the heap's placement again, see `../heap-placement/`).

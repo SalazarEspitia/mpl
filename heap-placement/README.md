@@ -29,7 +29,7 @@ processors, 15 runs of each, alternating:
 
 **Expected** (right runs).
 
-| | Linux x86-64 (32 cores) | macOS arm64 |
+| | Linux x86-64 (16 cores, 32 threads) | macOS arm64 |
 |---|---|---|
 | default | 24 of 50 | 5 of 5 |
 | bit 30 clear | 50 of 50 | 5 of 5 |

@@ -28,7 +28,7 @@ commit:
 - **main**: upstream `main` against `gc-ebr-align`. On `main` this program crashes in many runs for other
   reasons (#260), and only right runs are timed, so this pair may have little or nothing to compare.
 
-**Expected.** On a quiet 32-core x86-64 Linux machine, weak-cells pair, medians of 5 runs:
+**Expected.** On a quiet 16-core (32-thread) x86-64 Linux machine, weak-cells pair, medians of 5 runs:
 
 | Processors | 3 | 4 | 5 | 6 | 8 |
 |---|---|---|---|---|---|

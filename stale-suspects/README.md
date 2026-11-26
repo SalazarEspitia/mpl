@@ -38,7 +38,7 @@ and 4 processors and once more with settings that make collections very frequent
 
 | | Linux x86-64 | macOS arm64 |
 |---|---|---|
-| base | crashes in most runs: 32 of 80 right over eight settings on a 32-core machine | mostly right at the default heap placement; `../heap-placement/` shows why and how to make it crash |
+| base | crashes in most runs: 32 of 80 right over eight settings on a 16-core (32-thread) machine | mostly right at the default heap placement; `../heap-placement/` shows why and how to make it crash |
 | weak cells | 80 of 80 right | all right |
 
 The base's crashes are spread over the places named above; `out/results.md` lists each one's signal and frames.

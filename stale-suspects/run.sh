@@ -28,7 +28,7 @@ for c in "${CELLS[@]}"; do
       ev_run "$b, $lab" ' bad 0$' "$EV_O/bin/msvspots.$b" @mpl procs "$p" $rts -- safe 2 3 0 20000 ewt
     done
   done
-  ev_row "base, $lab" "Linux: crashes in most runs (32 of 80 right on our 32-core x86-64 machine); macOS: mostly right"
+  ev_row "base, $lab" "Linux: crashes in most runs (32 of 80 right on our 16-core (32-thread) x86-64 machine); macOS: mostly right"
   ev_row "weak, $lab" "all right (80 of 80 on that machine)"
 done
 ev_note "Program: \`msvspots safe 2 3 0 20000 ewt\`, $RUNS runs per row, the two builds alternating; \"frequent collections\" is \`@mpl $FREQ\`."

@@ -25,7 +25,7 @@ for i in $(seq 1 "$RUNS"); do
   EV_ENV="MPL_HEAP_HINT=$SET" ev_run "$R_SET" ' bad 0$' "$EV_O/bin/msvspots.hint" @mpl procs "$PROCS" -- safe 2 3 0 20000 ewt
 done
 EV_ENV=""
-ev_row "$R_DEF" "Linux: in between (24 of 50 right on our 32-core x86-64 machine); macOS: right (5 of 5)"
+ev_row "$R_DEF" "Linux: in between (24 of 50 right on our 16-core (32-thread) x86-64 machine); macOS: right (5 of 5)"
 ev_row "$R_CLR" "all right (Linux 50 of 50, macOS 5 of 5)"
 ev_row "$R_SET" "crashes in most runs (Linux 4 of 50 right, macOS 2 of 5)"
 ignored=$(cat "$EV_O"/runs/*.txt | grep -a -c 'heap-hint: \(HINT IGNORED\|WINDOW FULL\)' || true)

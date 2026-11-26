@@ -14,7 +14,7 @@ RUNS=${RUNS:-5}
 if [ -z "${PROCS:-}" ]; then PROCS=""; for p in 2 3 4; do [ "$p" -le "$(ev_cores)" ] && PROCS="$PROCS $p"; done; fi
 
 ev_init ebr-false-sharing "EBR false sharing: EBR's blocks from malloc against 128-byte aligned (wall time)"
-EXPECT_weak="aligned faster. Quiet 32-core x86-64 Linux: 23% at procs 3, 27% at procs 4 (procs 2 not measured); macOS arm64: about 14% at procs 4"
+EXPECT_weak="aligned faster. Quiet 16-core (32-thread) x86-64 Linux: 23% at procs 3, 27% at procs 4 (procs 2 not measured); macOS arm64: about 14% at procs 4"
 EXPECT_main="not measured before with this program; few right runs expected (issue #260)"
 for pair in ${PAIRS:-main weak}; do
   case $pair in
