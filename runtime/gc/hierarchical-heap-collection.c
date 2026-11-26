@@ -1156,12 +1156,41 @@ objptr relocateObject(
 
 /* ========================================================================= */
 
+/* PROTOTYPE (weak cells). Is this chunk in the from-space of this collection?
+ * The test forwardHHObjptr makes before it follows a forwarding pointer
+ * (depth in the collection's range, level head the from-space heap of that
+ * depth; a chunk this collection pinned keeps that level head). For a chunk
+ * that is live (the caller holds a lease on its cell) but may belong to
+ * another thread's heap or be under a concurrent collection's sweep: the
+ * level head is read once and may be NULL (the sweep clears it before it
+ * frees the chunk), and nothing is path-compressed. */
+static bool suspectChunkInFromSpace(HM_chunk chunk, struct ForwardHHObjptrArgs *args)
+{
+  HM_UnionFindNode cursor = __atomic_load_n(&(chunk->levelHead), __ATOMIC_ACQUIRE);
+  if (NULL == cursor)
+    return FALSE;
+  while (TRUE) {
+    HM_UnionFindNode parent =
+      atomic_load_explicit(&(cursor->representative), memory_order_acquire);
+    if (NULL == parent)
+      break;
+    cursor = parent;
+  }
+  HM_HierarchicalHeap chunkHH = cursor->payload;
+  if (NULL == chunkHH)
+    return FALSE;
+  uint32_t chunkDepth = HM_HH_getDepth(chunkHH);
+  return chunkDepth >= args->minDepth && chunkDepth <= args->maxDepth
+         && args->fromSpace[chunkDepth] == chunkHH;
+}
+
 /* PROTOTYPE (weak cells, entanglement-suspects.h). For each entry of the
- * suspect lists in scope: if its object was copied, the entry follows the
- * copy (a new reference, on the cell of the copy's chunk); otherwise it is
- * kept as it is. No test of pins or of the from-space is needed: if this
- * collection frees the object's chunk, the chunk free marks the cell dead and
- * the entry is dropped at its next use; and an entry whose chunk was freed
+ * suspect lists in scope: if this collection copied its object, the entry
+ * follows the copy (a new reference, on the cell of the copy's chunk); an
+ * entry at a forwarding pointer this collection cannot have written is
+ * dropped; every other entry is kept as it is. No test of pins is needed: if
+ * this collection frees the object's chunk, the chunk free marks the cell dead
+ * and the entry is dropped at its next use; and an entry whose chunk was freed
  * earlier, by any collector, is dropped here. */
 void copySuspect(
   GC_state s,
@@ -1179,14 +1208,41 @@ void copySuspect(
     s->cumulativeStatistics->numSuspectsDroppedDeadLGC++;
     return;
   }
-  if (hasFwdPtr(p))
+  /* under the lease: the word is the object's header or a forwarding pointer
+   * (read once) */
+  GC_header header = getHeader(p);
+  if (isFwdHeader(header))
   {
-    objptr new_ptr = getFwdPtr(p);
+    /* A forwarding pointer is followed only if this collection can have
+     * written it: the object's chunk (live, under the lease) is in this
+     * collection's from-space, as forwardHHObjptr requires. A live chunk can
+     * carry forwarding pointers of other collections: a collection keeps a
+     * chunk whole when an object in it is pinned, with the forwarding pointers
+     * of the objects it copied out of it, and another thread's collection
+     * writes them in its own chunks. Such a pointer may be stale (the copy
+     * moved again, or freed and its block reused), and following it would
+     * read and write the header of a block nothing protects. The entry is
+     * dropped, as the two clears drop an entry at a forwarding pointer: the
+     * word is no longer the object, so the entry can never be cleared; keeping
+     * it would only make every later pass visit it.
+     *
+     * NOT covered by this test: a chunk kept by an earlier collection of this
+     * heap is in this collection's from-space again, and an old forwarding
+     * pointer in it passes. That needs an entry that was out of the scope of
+     * the collection that copied its object and is in the scope of this one.
+     * Every collection that copies a suspect has the suspect's list in its
+     * scope (the lists of the heaps it collects), except for a clear set
+     * taken out of its heap, and the clear drops those entries (they never
+     * come back to a list); the debug runtime asserts that the target is in
+     * this collection's to-space. */
+    bool inScope = suspectChunkInFromSpace(HM_getChunkOf(p), args);
     ES_release(s, entry.cell, TRUE);
-    /* Forwarded by this collection: every collection that copies a suspect
-     * has the suspect's list in its scope (the lists of the heaps it
-     * collects), except for a clear set taken out of its heap, whose
-     * forwarded entries the clear drops. */
+    if (!inScope) {
+      s->cumulativeStatistics->numSuspectsDroppedForwardedLGC++;
+      return;
+    }
+    objptr new_ptr = (objptr)header;
+    assert(isObjptr(new_ptr));
     assert(isObjptrInToSpace(new_ptr, args));
     if (!ES_newEntry(s, new_ptr, &entry))
       return;

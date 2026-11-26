@@ -130,9 +130,10 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
            cumulativeStatistics->numSuspectsDroppedDeadClear,
            cumulativeStatistics->numSuspectsDroppedDeadParClear,
            cumulativeStatistics->numSuspectsDroppedDeadLGC);
-  fprintf (out, "suspect entries dropped forwarded: clear %"PRIuMAX", parallel clear %"PRIuMAX"\n",
+  fprintf (out, "suspect entries dropped forwarded: clear %"PRIuMAX", parallel clear %"PRIuMAX", local collection %"PRIuMAX"\n",
            cumulativeStatistics->numSuspectsDroppedForwardedClear,
-           cumulativeStatistics->numSuspectsDroppedForwardedParClear);
+           cumulativeStatistics->numSuspectsDroppedForwardedParClear,
+           cumulativeStatistics->numSuspectsDroppedForwardedLGC);
 #if ASSERT
   fprintf (out, "suspects pinned in a chunk a local collection frees (debug runtime): %"PRIuMAX"\n",
            cumulativeStatistics->numSuspectsPinnedInChunkLGCFrees);
