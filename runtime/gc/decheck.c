@@ -326,72 +326,11 @@ bool decheckIsOrdered(GC_thread thread, decheck_tid_t t1) {
 
 #ifdef DETECT_ENTANGLEMENT
 
-#if ASSERT
-void traverseAndCheck(
-  GC_state s,
-  __attribute__((unused)) objptr *opp,
-  objptr op,
-  void *rawArgs)
-{
-
-  GC_header header = getHeader(objptrToPointer(op, NULL));
-  pointer p = objptrToPointer (op, NULL);
-  assert (pinType(header) == PIN_ANY);
-  assert (!isFwdHeader(header));
-
-  uint32_t requiredUnpinDepth = *(uint32_t*)rawArgs;
-  uint32_t actualUnpinDepth = unpinDepthOfH(header);
-  uint32_t currentDepth = HM_getObjptrDepth(op);
-
-  assert (actualUnpinDepth <= requiredUnpinDepth);
-
-  if (currentDepth <= requiredUnpinDepth) {
-    /* This object is an ancestor of the current thread, so the object is
-     * disentangled from the current thread's perspective. No futher checks
-     * are required. (If this object is mutable and has a down-pointer, it might
-     * be a suspect, but I don't need it to be a suspect for entanglement.)
-     */
-    return;
-  }
-  else if (isMutableH(s, header)) {
-    assert (ES_contains(NULL, op));
-  }
-  else {
-    uint32_t requiredUnpinDepthForReachable = actualUnpinDepth;
-    struct GC_foreachObjptrClosure echeckClosure =
-        {.fun = traverseAndCheck, .env = &requiredUnpinDepthForReachable};
-    foreachObjptrInObject(s, p, &trueObjptrPredicateClosure, &echeckClosure, FALSE);
-  }
-}
-#else
-inline void traverseAndCheck(
-  __attribute__((unused)) GC_state s,
-  __attribute__((unused)) objptr *opp,
-  __attribute__((unused)) objptr op,
-  __attribute__((unused)) void *rawArgs)
-{
-  return;
-}
-#endif
-
-static inline objptr getRacyFwdPtr(pointer p) {
-  while (isFwdHeader(getHeader(p))) {
-    p = objptrToPointer(getFwdPtr(p), NULL);
-  }
-  return pointerToObjptr(p, NULL);
-}
-
-/* make_entangled pins everything reachable from an entangled object, up to
- * mutable objects and objects that are already pinned deeply enough. An
- * immutable object is pinned only after everything reachable from it is,
- * since a reader that finds it pinned doesn't look further.
- *
- * The traversal keeps its pending objects in an explicit stack, not on the C
- * stack: a long immutable structure (e.g. a list) would otherwise overflow a
- * worker thread's C stack, one recursive call per pointer hop. The work is
- * the same as the recursion's; the stack holds at most one frame per pointer
- * field of the objects on the current path, and lives on this C stack while
- * it's small, else on the C heap.
+/* An explicit stack of objects still to visit, for the traversals below
+ * (make_entangled, and traverseAndCheck in the debug runtime): a recursive
+ * traversal of a long immutable structure, e.g. a list, overflows a worker
+ * thread's C stack, one call per pointer hop. The stack lives on the C stack
+ * while it's small, else on the C heap.
  */
 struct ME_frame {
   objptr *opp;          /* where the pointer to the object is */
@@ -442,8 +381,81 @@ static void ME_pushField(
   ME_push(args->stack, f);
 }
 
-/* What the recursion did after an object's own work: fix the pointer to it if
- * it moved, make a mutable object a suspect, and (debug runtime) check. */
+#if ASSERT
+void traverseAndCheck(
+  GC_state s,
+  objptr *opp,
+  __attribute__((unused)) objptr op,
+  void *rawArgs)
+{
+  struct ME_stack st;
+  st.frames = st.inlineFrames;
+  st.size = 0;
+  st.capacity = ME_INLINE_FRAMES;
+
+  struct ME_frame root =
+    {.opp = opp, .ptr = BOGUS_OBJPTR, .unpinDepth = *(uint32_t*)rawArgs,
+     .expanded = false, .addToRemSet = false};
+  ME_push(&st, root);
+
+  while (st.size > 0) {
+    struct ME_frame f = st.frames[--st.size];
+    objptr op = *(f.opp);
+    GC_header header = getHeader(objptrToPointer(op, NULL));
+    pointer p = objptrToPointer (op, NULL);
+    assert (pinType(header) == PIN_ANY);
+    assert (!isFwdHeader(header));
+
+    uint32_t requiredUnpinDepth = f.unpinDepth;
+    uint32_t actualUnpinDepth = unpinDepthOfH(header);
+    uint32_t currentDepth = HM_getObjptrDepth(op);
+
+    assert (actualUnpinDepth <= requiredUnpinDepth);
+
+    if (currentDepth <= requiredUnpinDepth) {
+      /* This object is an ancestor of the current thread, so the object is
+       * disentangled from the current thread's perspective. No futher checks
+       * are required. (If this object is mutable and has a down-pointer, it might
+       * be a suspect, but I don't need it to be a suspect for entanglement.)
+       */
+      continue;
+    }
+    else if (isMutableH(s, header)) {
+      assert (ES_contains(NULL, op));
+    }
+    else {
+      struct ME_pushArgs args =
+        {.stack = &st, .unpinDepth = actualUnpinDepth};
+      struct GC_foreachObjptrClosure pushClosure =
+        {.fun = ME_pushField, .env = &args};
+      foreachObjptrInObject(s, p, &trueObjptrPredicateClosure, &pushClosure, FALSE);
+    }
+  }
+
+  if (st.frames != st.inlineFrames)
+    free(st.frames);
+}
+#else
+inline void traverseAndCheck(
+  __attribute__((unused)) GC_state s,
+  __attribute__((unused)) objptr *opp,
+  __attribute__((unused)) objptr op,
+  __attribute__((unused)) void *rawArgs)
+{
+  return;
+}
+#endif
+
+static inline objptr getRacyFwdPtr(pointer p) {
+  while (isFwdHeader(getHeader(p))) {
+    p = objptrToPointer(getFwdPtr(p), NULL);
+  }
+  return pointerToObjptr(p, NULL);
+}
+
+/* make_entangled's last steps for each object it visits: fix the pointer to
+ * the object if it moved, make a mutable object a suspect, and (debug
+ * runtime) check. */
 static void ME_finish(
   GC_state s,
   struct ME_frame *f,
@@ -474,6 +486,15 @@ static void ME_finish(
   assert (!mutable || ES_contains(NULL, new_ptr));
 }
 
+/* make_entangled pins everything reachable from an entangled object, up to
+ * mutable objects and objects that are already pinned deeply enough. An
+ * immutable object is pinned only after everything reachable from it is,
+ * since a reader that finds it pinned doesn't look further.
+ *
+ * The traversal keeps its pending objects in an explicit stack (ME_stack),
+ * not on the C stack. The work is the same as a recursion's; the stack holds
+ * at most one frame per pointer field of the objects on the current path.
+ */
 static void make_entangled(
   GC_state s,
   objptr *rootp,
