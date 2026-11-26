@@ -68,9 +68,14 @@ static void giveHeapToThreadMadeBeforeBoot(GC_state s, GC_thread thread) {
   assert(!HM_HH_beforeBoot(s));
   assert(NULL == thread->currentChunk);
 
+  /* Only a thread made before the boot, by newThreadInCurrentHeap (depth
+   * 0), may come here; newThread leaves HM_HH_INVALID_DEPTH, so this also
+   * catches a switch to a heapless thread made by newThread (a prototype of
+   * copyCurrent, or GC_HH_forkThread's), which needs a heap from its maker. */
+  assert(0 == thread->currentDepth);
+
   HM_HierarchicalHeap hh = HM_HH_new(s, 0);
   thread->hierarchicalHeap = hh;
-  thread->currentDepth = 0;
   thread->bytesAllocatedSinceLastCollection = 0;
   thread->bytesSurvivedLastCollection = 0;
 
