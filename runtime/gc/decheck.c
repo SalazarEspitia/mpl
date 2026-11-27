@@ -593,8 +593,11 @@ static void ME_finish(
  * not on the C stack. It visits the objects in the order the recursion did,
  * with the same unpin depths, and holds one frame per object on the current
  * path.
+ *
+ * Not inlined: its stack's inline frames would make manage_entangled's own
+ * frame about 3 KiB on every call, including the calls that return early.
  */
-static void make_entangled(
+static __attribute__((noinline)) void make_entangled(
   GC_state s,
   objptr *rootp,
   struct ManageEntangledArgs *mea)
