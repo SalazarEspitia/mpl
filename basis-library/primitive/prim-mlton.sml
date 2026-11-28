@@ -163,6 +163,10 @@ structure GC =
         _import "GC_currentHeapSize" runtime private:
         GCState.t -> C_UIntmax.t;
 
+      val maxHeapSize =
+        _import "GC_maxHeapSize" runtime private:
+        GCState.t -> C_UIntmax.t;
+
       val currentHeapMapped =
         _import "GC_currentHeapMapped" runtime private:
         GCState.t -> C_UIntmax.t;

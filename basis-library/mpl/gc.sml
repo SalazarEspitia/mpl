@@ -34,6 +34,9 @@ struct
     fun currentHeapSize () =
       C_UIntmax.toLargeInt (GC.currentHeapSize (gcState ()))
 
+    fun maxHeapSize () =
+      C_UIntmax.toLargeInt (GC.maxHeapSize (gcState ()))
+
     fun currentHeapMapped () =
       C_UIntmax.toLargeInt (GC.currentHeapMapped (gcState ()))
 
