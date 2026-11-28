@@ -14,18 +14,20 @@ signature MLTON_GC =
       val setSummary: bool -> unit
       val unpack: unit -> unit
 
-      (* Most meaningful immediately after 'collect()'. *)
+      (* MLton's statistics. MPL's collector has no copying, mark-compact or
+       * minor collections and doesn't measure bytes live, so in MPL
+       * numCopyingGCs, numMarkCompactGCs, numMinorGCs and maxBytesLive are
+       * always 0, and lastBytesLive is the size of the initial heap. See
+       * MPL.GC for the statistics MPL keeps.
+       *)
       structure Statistics :
          sig
             val bytesAllocated: unit -> IntInf.int
-            val bytesPromoted: unit -> IntInf.int
             val lastBytesLive: unit -> IntInf.int
             val numCopyingGCs: unit -> IntInf.int
             val numMarkCompactGCs: unit -> IntInf.int
             val numMinorGCs: unit -> IntInf.int
             val maxBytesLive: unit -> IntInf.int
-            val maxHeapOccupancy: unit -> IntInf.int
-            val maxChunkPoolOccupancy: unit -> IntInf.int
 
             val localGCTimeOfProc : int -> Time.time
             val promoTimeOfProc : int -> Time.time

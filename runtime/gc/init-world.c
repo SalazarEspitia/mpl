@@ -184,11 +184,8 @@ void initWorld(GC_state s) {
 #endif
 }
 
-void duplicateWorld (GC_state d, GC_state s) {
+void duplicateWorld (GC_state d, __attribute__ ((unused)) GC_state s) {
   d->lastMajorStatistics->bytesLive = 0;
 
   initThreadAndHeap(d, 0);
-
-  /* Now copy stats, heap data from original */
-  d->cumulativeStatistics->maxHeapSize = s->cumulativeStatistics->maxHeapSize;
 }

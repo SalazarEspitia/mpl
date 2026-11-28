@@ -133,16 +133,6 @@ Word32 Parallel_numberOfProcessors (GC_state s) {
 }
 
 
-Word64 Parallel_maxBytesLive (void) {
-  GC_state s = pthread_getspecific (gcstate_key);
-  return (uint64_t)s->cumulativeStatistics->maxBytesLiveSinceReset;
-}
-
-void Parallel_resetBytesLive (void) {
-  GC_state s = pthread_getspecific (gcstate_key);
-  s->cumulativeStatistics->maxBytesLiveSinceReset = 0;
-}
-
 uint64_t Parallel_getTimeInGC (GC_state s) {
   uint64_t gcTime = rusageTime (&s->cumulativeStatistics->ru_gc);
   return gcTime;

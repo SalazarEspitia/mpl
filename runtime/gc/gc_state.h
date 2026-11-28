@@ -40,7 +40,6 @@ struct GC_state {
   objptr callFromCHandlerThread; /* Handler for exported C calls (in heap). */
   pointer callFromCOpArgsResPtr; /* Pass op, args, and res from exported C call */
   struct GC_controls *controls;
-  struct GC_globalCumulativeStatistics* globalCumulativeStatistics;
   struct GC_cumulativeStatistics *cumulativeStatistics;
   objptr currentThread; /* Currently executing thread (in heap). */
   objptr wsQueue; /* The work-stealing queue for this processor */
@@ -129,11 +128,7 @@ PRIVATE void GC_setAmOriginal (GC_state s, Bool_t b);
 PRIVATE void GC_setControlsMessages (GC_state s, Bool_t b);
 PRIVATE void GC_setControlsSummary (GC_state s, Bool_t b);
 PRIVATE void GC_setControlsRusageMeasureGC (GC_state s, Bool_t b);
-// SAM_NOTE: TODO: remove this and replace with blocks statistics
-PRIVATE size_t GC_getMaxChunkPoolOccupancy (void);
-PRIVATE size_t GC_getGlobalCumulativeStatisticsMaxHeapOccupancy (GC_state s);
 PRIVATE uintmax_t GC_getCumulativeStatisticsBytesAllocated (GC_state s);
-PRIVATE uintmax_t GC_getCumulativeStatisticsBytesPromoted (GC_state s);
 PRIVATE uintmax_t GC_getCumulativeStatisticsNumCopyingGCs (GC_state s);
 PRIVATE uintmax_t GC_getCumulativeStatisticsNumMarkCompactGCs (GC_state s);
 PRIVATE uintmax_t GC_getCumulativeStatisticsNumMinorGCs (GC_state s);

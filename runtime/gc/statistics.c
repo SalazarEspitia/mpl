@@ -15,22 +15,9 @@ void outputCollectionStatisticsJSON(FILE* out,
                                     uintmax_t num,
                                     uintmax_t bytes);
 
-void outputSyncStatisticsJSON(FILE* out,
-                              const char* type,
-                              uintmax_t num);
-
 /************************/
 /* Function Definitions */
 /************************/
-
-struct GC_globalCumulativeStatistics* newGlobalCumulativeStatistics(void) {
-  struct GC_globalCumulativeStatistics* stats;
-
-  stats = malloc(sizeof(struct GC_globalCumulativeStatistics));
-  stats->maxHeapOccupancy = 0;
-
-  return stats;
-}
 
 struct GC_cumulativeStatistics *newCumulativeStatistics(void) {
   struct GC_cumulativeStatistics *cumulativeStatistics;
@@ -38,35 +25,16 @@ struct GC_cumulativeStatistics *newCumulativeStatistics(void) {
   cumulativeStatistics = (struct GC_cumulativeStatistics *)
     malloc (sizeof (struct GC_cumulativeStatistics));
   cumulativeStatistics->bytesAllocated = 0;
-  cumulativeStatistics->bytesPromoted = 0;
-  cumulativeStatistics->bytesFilled = 0;
-  cumulativeStatistics->bytesCopied = 0;
-  cumulativeStatistics->bytesCopiedMinor = 0;
-  cumulativeStatistics->bytesHashConsed = 0;
-  cumulativeStatistics->bytesMarkCompacted = 0;
-  cumulativeStatistics->bytesScannedMinor = 0;
   cumulativeStatistics->bytesHHLocaled = 0;
   cumulativeStatistics->bytesReclaimedByLocal = 0;
   cumulativeStatistics->bytesReclaimedByCC = 0;
   cumulativeStatistics->bytesInScopeForLocal = 0;
   cumulativeStatistics->bytesInScopeForCC = 0;
   cumulativeStatistics->maxBytesLive = 0;
-  cumulativeStatistics->maxBytesLiveSinceReset = 0;
-  cumulativeStatistics->maxHeapSize = 0;
-  cumulativeStatistics->maxHHLCS = 0;
-  cumulativeStatistics->maxHHLCHS = 0;
-  cumulativeStatistics->maxPauseTime = 0;
   cumulativeStatistics->maxStackSize = 0;
   cumulativeStatistics->maxStackFramesWalkedForHeartbeat = 0;
   cumulativeStatistics->maxStackSizeForHeartbeat = 0;
-  cumulativeStatistics->syncForOldGenArray = 0;
-  cumulativeStatistics->syncForNewGenArray = 0;
-  cumulativeStatistics->syncForStack = 0;
-  cumulativeStatistics->syncForHeap = 0;
-  cumulativeStatistics->syncMisc = 0;
-  cumulativeStatistics->numCardsMarked = 0;
   cumulativeStatistics->numCopyingGCs = 0;
-  cumulativeStatistics->numHashConsGCs = 0;
   cumulativeStatistics->numMarkCompactGCs = 0;
   cumulativeStatistics->numMinorGCs = 0;
   cumulativeStatistics->numHHLocalGCs = 0;
@@ -96,9 +64,6 @@ struct GC_cumulativeStatistics *newCumulativeStatistics(void) {
   rusageZero (&cumulativeStatistics->ru_gcCC);
   rusageZero (&cumulativeStatistics->ru_thread);
   cumulativeStatistics->ruThreadRecorded = FALSE;
-  rusageZero (&cumulativeStatistics->ru_crit);
-  rusageZero (&cumulativeStatistics->ru_sync);
-  rusageZero (&cumulativeStatistics->ru_bsp);
 
   timespec_now(&(cumulativeStatistics->lastHeartbeatHandlerTimestamp));
   timespec_now(&(cumulativeStatistics->lastHeartbeatSignalTimestamp));
@@ -129,44 +94,14 @@ struct GC_lastMajorStatistics *newLastMajorStatistics(void) {
 void S_outputCumulativeStatisticsJSON(
     FILE* out, struct GC_cumulativeStatistics* statistics) {
   uintmax_t gcTime;
-  uintmax_t syncTime;
-  uintmax_t critTime;
-  uintmax_t bspTime;
 
   gcTime = rusageTime (&statistics->ru_gc);
-  syncTime = rusageTime (&statistics->ru_sync);
-  critTime = rusageTime (&statistics->ru_crit);
-  bspTime = rusageTime (&statistics->ru_bsp);
 
   fprintf(out, "{ ");
   {
     fprintf(out, "\"gcStats\" : ");
     fprintf(out, "[");
     {
-      outputCollectionStatisticsJSON(out,
-                                     "Copying",
-                                     &statistics->ru_gcCopying,
-                                     statistics->numCopyingGCs,
-                                     statistics->bytesCopied);
-
-      fprintf(out, ", ");
-
-      outputCollectionStatisticsJSON(out,
-                                     "Mark-Compact",
-                                     &statistics->ru_gcMarkCompact,
-                                     statistics->numMarkCompactGCs,
-                                     statistics->bytesMarkCompacted);
-
-      fprintf(out, ", ");
-
-      outputCollectionStatisticsJSON(out,
-                                     "Generational Minor",
-                                     &statistics->ru_gcMinor,
-                                     statistics->numMinorGCs,
-                                     statistics->bytesCopiedMinor);
-
-      fprintf(out, ", ");
-
       outputCollectionStatisticsJSON(out,
                                      "Hierarchical Heap Local",
                                      &statistics->ru_gcHHLocal,
@@ -181,100 +116,11 @@ void S_outputCumulativeStatisticsJSON(
 
     fprintf(out, ", ");
 
-    fprintf(out, "\"syncTime\" : %"PRIuMAX, syncTime);
-
-    fprintf(out, ", ");
-
-    fprintf(out, "\"syncStats\" : ");
-    fprintf(out, "[");
-    {
-      outputSyncStatisticsJSON(out,
-                               "Old Generation Array",
-                               statistics->syncForOldGenArray);
-
-      fprintf(out, ", ");
-
-      outputSyncStatisticsJSON(out,
-                               "New Generation Array",
-                               statistics->syncForNewGenArray);
-
-      fprintf(out, ", ");
-
-      outputSyncStatisticsJSON(out,
-                               "Stack",
-                               statistics->syncForStack);
-
-      fprintf(out, ", ");
-
-      outputSyncStatisticsJSON(out,
-                               "Heap",
-                               statistics->syncForHeap);
-
-      fprintf(out, ", ");
-
-      outputSyncStatisticsJSON(out,
-                               "Miscellaneous",
-                               statistics->syncMisc);
-    }
-    fprintf(out, "]");
-
-    fprintf(out, ", ");
-
-    fprintf(out, "\"critTime\" : %"PRIuMAX, critTime);
-
-    fprintf(out, ", ");
-
-    fprintf(out, "\"bspTime\" : %"PRIuMAX, bspTime);
-
-    fprintf(out, ", ");
-
-    fprintf(out, "\"maxPauseTime\" : %"PRIuMAX, statistics->maxPauseTime);
-
-    fprintf(out, ", ");
-
     fprintf(out, "\"bytesAllocated\" : %"PRIuMAX, statistics->bytesAllocated);
 
     fprintf(out, ", ");
 
-    fprintf(out, "\"bytesPromoted\" : %"PRIuMAX, statistics->bytesPromoted);
-
-    fprintf(out, ", ");
-
-    fprintf(out, "\"maxGlobalHeapBytesLive\" : %"PRIuMAX, statistics->maxBytesLive);
-
-    fprintf(out, ", ");
-
-    fprintf(out, "\"maxGlobalHeapSize\" : %"PRIuMAX, statistics->maxHeapSize);
-
-    fprintf(out, ", ");
-
-    fprintf(out,
-            "\"maxHHLCS\" : %"PRIuMAX,
-            statistics->maxHHLCS);
-
-    fprintf(out, ", ");
-
-    fprintf(out,
-            "\"maxHHLCHS\" : %"PRIuMAX,
-            statistics->maxHHLCHS);
-
-    fprintf(out, ", ");
-
     fprintf(out, "\"maxStackSize\" : %"PRIuMAX, statistics->maxStackSize);
-
-    fprintf(out, ", ");
-
-    fprintf(out, "\"numCardsMarked\" : %"PRIuMAX, statistics->numCardsMarked);
-
-    fprintf(out, ", ");
-
-    fprintf(out,
-            "\"bytesScannedMinor\" : %"PRIuMAX,
-            statistics->bytesScannedMinor);
-
-    fprintf(out, ", ");
-
-    fprintf(out, "\"bytesHashConsed\" : %"PRIuMAX, statistics->bytesHashConsed);
   }
   fprintf(out, " }");
 }
@@ -305,20 +151,6 @@ void outputCollectionStatisticsJSON(FILE* out,
     fprintf(out, ", ");
 
     fprintf(out, "\"bytes\" : %"PRIuMAX, bytes);
-  }
-  fprintf(out, " }");
-}
-
-void outputSyncStatisticsJSON(FILE* out,
-                              const char* type,
-                              uintmax_t num) {
-  fprintf(out, "{ ");
-  {
-    fprintf(out, "\"type\" : \"%s\"", type);
-
-    fprintf(out, ", ");
-
-    fprintf(out, "\"number\" : %"PRIuMAX, num);
   }
   fprintf(out, " }");
 }
