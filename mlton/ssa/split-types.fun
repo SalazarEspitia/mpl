@@ -163,11 +163,28 @@ fun transform (program as Program.T {datatypes, globals, functions, main}) =
             in
                TypeInfo.fromType Type.unit
             end
+            (* Ref_cas (r, old, new) and Array_cas (a, i, old, new) compare old
+             * against the current contents and may store new; both operands
+             * and the result are values of the contents type, exactly as for
+             * an assign/update followed by a deref/sub. *)
+            fun casPrim (heapType, oldIdx) args = let
+               val heap = Vector.sub (args, 0)
+               val _ = TypeInfo.coerce (heap, TypeInfo.Heap (Vector.sub (args, oldIdx), heapType))
+               val _ = TypeInfo.coerce (heap, TypeInfo.Heap (Vector.sub (args, oldIdx + 1), heapType))
+            in
+               derefPrim args
+            end
             fun equalPrim args =
                let
                   val _ = TypeInfo.coerce (Vector.sub (args, 0), Vector.sub (args, 1))
                in
                   primBoolInfo
+               end
+            fun copyPrim args =
+               let
+                  val _ = TypeInfo.coerce (Vector.sub (args, 2), Vector.sub (args, 0))
+               in
+                  TypeInfo.fromType Type.unit
                end
             fun default () =
               if case Type.dest resultType of
@@ -185,6 +202,9 @@ fun transform (program as Program.T {datatypes, globals, functions, main}) =
                   in
                      (ty, TypeInfo.Array)
                   end
+               | Prim.Array_cas _ => casPrim (TypeInfo.Array, 2) args
+               | Prim.Array_copyArray => copyPrim args
+               | Prim.Array_copyVector => copyPrim args
                | Prim.Array_sub _ => derefPrim args
                | Prim.Array_toArray => Vector.sub (args, 0)
                | Prim.Array_toVector => Vector.sub (args, 0)
@@ -201,6 +221,7 @@ fun transform (program as Program.T {datatypes, globals, functions, main}) =
                | Prim.Ref_ref => refPrim TypeInfo.Ref args
                | Prim.Ref_deref _ => derefPrim args
                | Prim.Ref_assign _ => assignPrim TypeInfo.Ref args
+               | Prim.Ref_cas _ => casPrim (TypeInfo.Ref, 1) args
                | Prim.Vector_sub => derefPrim args
                | Prim.Vector_vector => TypeInfo.Heap
                   let
@@ -329,7 +350,16 @@ fun transform (program as Program.T {datatypes, globals, functions, main}) =
          let
             val newTy =
                case varopt of
-                    NONE => ty
+                    NONE =>
+                       (* A CAS whose result is unused keeps its statement, for its
+                        * side effect, but has no variable to carry the result's new
+                        * type. The result has the type of the contents. *)
+                       (case exp of
+                           Exp.PrimApp {prim = Prim.Ref_cas _, args, ...} =>
+                              Type.deRef (getTy (value (Vector.sub (args, 0))))
+                         | Exp.PrimApp {prim = Prim.Array_cas _, args, ...} =>
+                              Type.deArray (getTy (value (Vector.sub (args, 0))))
+                         | _ => ty)
                   | SOME var => getTy (value var)
             val newExp = loopExp (exp, newTy)
          in
