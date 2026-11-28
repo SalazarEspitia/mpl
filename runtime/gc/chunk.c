@@ -109,6 +109,7 @@ HM_chunk HM_initializeChunk(pointer start, pointer end) {
   chunk->decheckState = DECHECK_BOGUS_TID;
   chunk->retireChunk = FALSE;
   chunk->magic = CHUNK_MAGIC;
+  chunk->suspectCell = NULL;
 
 #if ASSERT
   /* clear out memory to quickly catch some memory safety errors */
@@ -182,6 +183,14 @@ void HM_freeChunkWithInfo(
   writeFreedBlockInfoFnClosure f,
   enum BlockPurpose purpose)
 {
+  /* PROTOTYPE (weak cells, entanglement-suspects.h): every chunk free goes
+   * through here, whoever frees (a local collection, a concurrent collection,
+   * EBR). From here on, a suspect entry that still points into this chunk
+   * finds its cell dead and is dropped without touching the chunk. One load
+   * for a chunk that never held a suspect. */
+  if (NULL != __atomic_load_n(&(chunk->suspectCell), __ATOMIC_ACQUIRE))
+    ES_chunkDying(s, chunk);
+  assert(NULL == chunk->suspectCell);
 
   struct writeChunkInfoArgs args;
   if (NULL != f) {

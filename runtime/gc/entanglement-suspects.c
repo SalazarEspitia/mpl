@@ -1,3 +1,221 @@
+/* ========================================================================
+ * PROTOTYPE: weak cells (see entanglement-suspects.h)
+ * ======================================================================== */
+
+static struct FixedSizeAllocator *ES_cellAllocators = NULL;
+
+#if ASSERT
+/* TEST ONLY (see entanglement-suspects.h): set once, before any processor
+ * uses an entry */
+static unsigned long ES_testLeaseSleepMicros = 0;
+static unsigned long ES_testLeaseSleepEvery = 1;
+static unsigned long ES_testLeaseSleepSites = ES_TEST_SITE_CLEAR | ES_TEST_SITE_PAR_CLEAR;
+
+static void ES_initTestLeaseDelay(void) {
+  const char *v = getenv("MPL_ES_TEST_LEASE_SLEEP");
+  if (NULL == v || 0 == *v)
+    return;
+  unsigned long micros = 0, every = 1, sites = ES_testLeaseSleepSites;
+  int n = sscanf(v, "%lu,%lu,%lu", &micros, &every, &sites);
+  if (n < 1 || 0 == every)
+    DIE("MPL_ES_TEST_LEASE_SLEEP: expected MICROSECONDS[,EVERY[,SITES]], got \"%s\"", v);
+  ES_testLeaseSleepMicros = micros;
+  ES_testLeaseSleepEvery = every;
+  ES_testLeaseSleepSites = sites;
+  fprintf(stderr, "MPL_ES_TEST_LEASE_SLEEP: %lu microseconds under a lease, every %lu uses, sites %lu\n",
+          micros, every, sites);
+}
+
+/* called with a lease held */
+void ES_testLeaseDelay(GC_state s, unsigned int site) {
+  if (0 == ES_testLeaseSleepMicros || !(ES_testLeaseSleepSites & site))
+    return;
+  if (0 != (++(s->cumulativeStatistics->numSuspectTestLeaseUses)) % ES_testLeaseSleepEvery)
+    return;
+  s->cumulativeStatistics->numSuspectTestLeaseSleeps++;
+  struct timespec t = {.tv_sec = (time_t)(ES_testLeaseSleepMicros / 1000000),
+                       .tv_nsec = (long)(ES_testLeaseSleepMicros % 1000000) * 1000};
+  nanosleep(&t, NULL);
+}
+#endif
+
+void ES_initCellAllocators(GC_state s) {
+  assert(NULL == ES_cellAllocators);
+#if ASSERT
+  ES_initTestLeaseDelay();
+#endif
+  ES_cellAllocators = malloc(s->numberOfProcs * sizeof(struct FixedSizeAllocator));
+  if (NULL == ES_cellAllocators)
+    DIE("Out of memory. Unable to allocate the suspect cell allocators.");
+  for (uint32_t i = 0; i < s->numberOfProcs; i++) {
+    initFixedSizeAllocator(&(ES_cellAllocators[i]), sizeof(struct ES_cell), BLOCK_FOR_SUSPECTS);
+  }
+}
+
+static inline FixedSizeAllocator ES_cellAllocator(GC_state s) {
+  assert(NULL != ES_cellAllocators);
+  assert(s->procNumber >= 0 && (uint32_t)s->procNumber < s->numberOfProcs);
+  return &(ES_cellAllocators[s->procNumber]);
+}
+
+static inline void ES_freeCell(GC_state s, ES_cell cell) {
+  /* no reference and no lease: nobody can reach the cell any more */
+  assert(0 == (__atomic_load_n(&(cell->state), __ATOMIC_RELAXED) & ~ES_CELL_DEAD));
+  s->cumulativeStatistics->numSuspectCellsFreed++;
+  freeFixedSize(ES_cellAllocator(s), cell);
+}
+
+ES_cell ES_cellOf(GC_state s, HM_chunk chunk) {
+  assert(CHUNK_MAGIC == chunk->magic);
+  ES_cell cell = __atomic_load_n(&(chunk->suspectCell), __ATOMIC_ACQUIRE);
+  if (NULL != cell)
+    return cell;
+
+  ES_cell fresh = (ES_cell)allocateFixedSize(s, ES_cellAllocator(s));
+  __atomic_store_n(&(fresh->state), ES_CELL_REF, __ATOMIC_RELAXED); /* the chunk's reference */
+  s->cumulativeStatistics->numSuspectCellsAllocated++;
+  if (__atomic_compare_exchange_n(&(chunk->suspectCell), &cell, fresh, FALSE,
+                                  __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
+    return fresh;
+
+  /* another processor installed one first; ours was never published */
+  s->cumulativeStatistics->numSuspectCellInstallRaces++;
+  __atomic_store_n(&(fresh->state), 0, __ATOMIC_RELAXED);
+  ES_freeCell(s, fresh);
+  assert(NULL != cell);
+  return cell;
+}
+
+bool ES_newEntry(GC_state s, objptr op, struct ES_entry *entry) {
+  ES_cell cell = ES_cellOf(s, HM_getChunkOf(objptrToPointer(op, NULL)));
+  uint64_t old = __atomic_fetch_add(&(cell->state), ES_CELL_REF, __ATOMIC_SEQ_CST);
+  if (old & ES_CELL_DEAD) {
+    /* NOT a safety net. An add is safe only under the assumption stated at
+     * ES_newEntry's declaration: the caller reaches op, so no collector is
+     * freeing op's chunk. If that were false (a collector bug, the same one
+     * that would make mark_suspect's header write unsafe), this branch would
+     * catch one interleaving of three: the kill landing between ES_cellOf's
+     * load and the fetch_add above, with other entries outstanding. The
+     * other two pass in silence: the free reading suspectCell == NULL just
+     * before ES_cellOf installs a cell (the cell sits on a freed block and is
+     * never marked dead), and the cell freed and recycled between the load
+     * and the fetch_add (the reference lands on another chunk's cell). */
+    assert(FALSE && "a suspect was added to a chunk that is being freed");
+    uint64_t now = __atomic_sub_fetch(&(cell->state), ES_CELL_REF, __ATOMIC_SEQ_CST);
+    if (0 == (now & ~ES_CELL_DEAD))
+      ES_freeCell(s, cell);
+    return FALSE;
+  }
+  entry->op = op;
+  entry->cell = cell;
+  return TRUE;
+}
+
+bool ES_lease(GC_state s, __attribute__((unused)) objptr op, ES_cell cell) {
+  assert(NULL != cell); /* invariant 1 */
+  uint64_t old = __atomic_fetch_add(&(cell->state), ES_CELL_LEASE, __ATOMIC_SEQ_CST);
+  assert(ES_CELL_REFS(old) >= 1); /* the entry's own reference */
+  assert((old & ES_CELL_LEASE_MASK) != ES_CELL_LEASE_MASK);
+  if (old & ES_CELL_DEAD) {
+    /* the chunk is gone: give back the lease and the entry's reference */
+    uint64_t now = __atomic_sub_fetch(&(cell->state), ES_CELL_LEASE + ES_CELL_REF, __ATOMIC_SEQ_CST);
+    if (0 == (now & ~ES_CELL_DEAD))
+      ES_freeCell(s, cell);
+    return FALSE;
+  }
+#if ASSERT
+  /* invariant 2: under the lease, op's chunk is live and this is its cell */
+  HM_chunk chunk = (HM_chunk)blockOf(objptrToPointer(op, NULL));
+  assert(CHUNK_MAGIC == chunk->magic);
+  assert(cell == __atomic_load_n(&(chunk->suspectCell), __ATOMIC_ACQUIRE));
+#endif
+  return TRUE;
+}
+
+#if ASSERT
+void ES_assertListInvariants(HM_chunkList list) {
+  if (NULL == list)
+    return;
+  for (HM_chunk chunk = HM_getChunkListFirstChunk(list); chunk != NULL; chunk = chunk->nextChunk) {
+    pointer frontier = HM_getChunkFrontier(chunk);
+    assert(0 == ((size_t)(frontier - HM_getChunkStart(chunk))) % sizeof(struct ES_entry));
+    for (pointer p = HM_getChunkStart(chunk); p < frontier; p += sizeof(struct ES_entry)) {
+      struct ES_entry *entry = (struct ES_entry *)p;
+      assert(isObjptr(entry->op));
+      assert(NULL != entry->cell);
+      /* a lease that keeps the entry's reference when the cell is dead */
+      uint64_t old = __atomic_fetch_add(&(entry->cell->state), ES_CELL_LEASE, __ATOMIC_SEQ_CST);
+      assert(ES_CELL_REFS(old) >= 1);
+      if (!(old & ES_CELL_DEAD)) {
+        HM_chunk objChunk = (HM_chunk)blockOf(objptrToPointer(entry->op, NULL));
+        assert(CHUNK_MAGIC == objChunk->magic);
+        assert(entry->cell == __atomic_load_n(&(objChunk->suspectCell), __ATOMIC_ACQUIRE));
+        /* inside the chunk. Not "below the frontier": the chunk's frontier
+         * field is brought up to date only when its thread enters the
+         * runtime, and an entangled reader can hold an entry for an object
+         * another thread has allocated in its current chunk since then. */
+        assert(objptrToPointer(entry->op, NULL) >= HM_getChunkStart(objChunk));
+        assert(objptrToPointer(entry->op, NULL) < HM_getChunkLimit(objChunk));
+        /* the word is the object's header, with the suspect bit, or a
+         * forwarding pointer */
+        GC_header h = getHeader(objptrToPointer(entry->op, NULL));
+        assert(!(h & GC_VALID_HEADER_MASK) || (h & SUSPECT_MASK));
+      }
+      __atomic_fetch_sub(&(entry->cell->state), ES_CELL_LEASE, __ATOMIC_SEQ_CST);
+    }
+  }
+}
+#endif
+
+void ES_release(__attribute__((unused)) GC_state s, ES_cell cell, bool dropRef) {
+  LOCAL_USED_FOR_ASSERT uint64_t now =
+    __atomic_sub_fetch(&(cell->state), ES_CELL_LEASE + (dropRef ? ES_CELL_REF : 0), __ATOMIC_SEQ_CST);
+  /* the chunk cannot die under a lease (invariant 4), so it still holds its
+   * reference and the cell cannot be freed here */
+  assert(!(now & ES_CELL_DEAD));
+  assert(ES_CELL_REFS(now) >= 1);
+}
+
+void ES_chunkDying(GC_state s, HM_chunk chunk) {
+  ES_cell cell = __atomic_load_n(&(chunk->suspectCell), __ATOMIC_ACQUIRE);
+  if (NULL == cell)
+    return;
+
+  size_t tries = 0;
+  uint64_t state = __atomic_load_n(&(cell->state), __ATOMIC_ACQUIRE);
+  while (TRUE) {
+    assert(!(state & ES_CELL_DEAD));   /* a chunk dies once */
+    assert(ES_CELL_REFS(state) >= 1);  /* the chunk's reference */
+    if (state & ES_CELL_LEASE_MASK) {
+      /* an entry of this chunk is in use (a header read and one CAS): wait */
+      if (0 == tries)
+        s->cumulativeStatistics->numSuspectCellLeaseWaits++;
+      s->cumulativeStatistics->numSuspectCellLeaseRetries++;
+      tries++;
+      if (tries > 100) sched_yield();
+      state = __atomic_load_n(&(cell->state), __ATOMIC_ACQUIRE);
+      continue;
+    }
+    uint64_t dead = (state | ES_CELL_DEAD) - ES_CELL_REF;
+    if (__atomic_compare_exchange_n(&(cell->state), &state, dead, FALSE,
+                                    __ATOMIC_SEQ_CST, __ATOMIC_ACQUIRE)) {
+      s->cumulativeStatistics->numChunksFreedWithSuspectCell++;
+      if (ES_CELL_REFS(dead) > 0) {
+        /* entries still point into this chunk: each one is dropped at its
+         * next use */
+        s->cumulativeStatistics->numChunksFreedWithSuspectEntries++;
+        s->cumulativeStatistics->numSuspectEntriesOutlivedChunk += ES_CELL_REFS(dead);
+      } else {
+        ES_freeCell(s, cell);
+      }
+      break;
+    }
+  }
+  __atomic_store_n(&(chunk->suspectCell), NULL, __ATOMIC_RELEASE);
+}
+
+/* ======================================================================== */
+
 static inline bool suspicious_header(GC_header h) {
   return (1 == ((h & SUSPECT_MASK) >> SUSPECT_SHIFT));
 }
@@ -50,16 +268,38 @@ void clear_suspect(
     objptr op,
     void *rawArgs)
 {
+  /* opp points at the op field of an entry in the list being cleared */
+  struct ES_entry entry = *(struct ES_entry *)opp;
+  assert(entry.op == op);
   pointer p = objptrToPointer(op, NULL);
   ES_clearArgs eargs = (ES_clearArgs) rawArgs;
 
+  if (!ES_lease(s, op, entry.cell)) {
+    /* the object's chunk has been freed: nothing to clear */
+    s->cumulativeStatistics->numSuspectsDroppedDeadClear++;
+    eargs->numDropped++;
+    return;
+  }
+
+  ES_testLeaseDelay(s, ES_TEST_SITE_CLEAR);
+
+  /* Under the lease the chunk is live: the word is the object's header, or
+   * its forwarding pointer if a local collection copied the object without
+   * seeing this entry. */
   GC_header header = getHeader(p);
+  if (!(header & GC_VALID_HEADER_MASK)) {
+    ES_release(s, entry.cell, TRUE);
+    s->cumulativeStatistics->numSuspectsDroppedForwardedClear++;
+    eargs->numDropped++;
+    return;
+  }
   uint32_t unpinDepth = (header & UNPIN_DEPTH_MASK) >> UNPIN_DEPTH_SHIFT;
 
   if (pinType(header) == PIN_ANY && unpinDepth < eargs->heapDepth) {
     /* Not ready to be cleared */
+    ES_release(s, entry.cell, FALSE);
     HM_HierarchicalHeap unpinHeap = HM_HH_getHeapAtDepth(s, eargs->thread, unpinDepth);
-    HM_storeInChunkListWithPurpose(s, HM_HH_getSuspects(unpinHeap), opp, sizeof(objptr), BLOCK_FOR_SUSPECTS);
+    HM_storeInChunkListWithPurpose(s, HM_HH_getSuspects(unpinHeap), &entry, sizeof(struct ES_entry), BLOCK_FOR_SUSPECTS);
     eargs->numMoved++;
     return;
   }
@@ -67,12 +307,14 @@ void clear_suspect(
   GC_header newHeader = header & ~(SUSPECT_MASK);
   if (__sync_bool_compare_and_swap(getHeaderp(p), header, newHeader)) {
     /* clearing successful */
+    ES_release(s, entry.cell, TRUE);
     eargs->numCleared++;
     return;
   }
   else {
     /*oops something changed in b/w, let's try at the next join*/
-    HM_storeInChunkListWithPurpose(s, eargs->newList, opp, sizeof(objptr), BLOCK_FOR_SUSPECTS);
+    ES_release(s, entry.cell, FALSE);
+    HM_storeInChunkListWithPurpose(s, eargs->newList, &entry, sizeof(struct ES_entry), BLOCK_FOR_SUSPECTS);
     eargs->numFailed++;
 
     LOG(LM_HIERARCHICAL_HEAP, LL_INFO,
@@ -89,20 +331,20 @@ bool ES_mark(__attribute__((unused)) GC_state s, objptr op) {
   return mark_suspect(op);
 }
 
-void ES_unmark(GC_state s, objptr op, ES_clearArgs args) {
-  clear_suspect(s, &op, op, args);
-}
-
-void ES_add(GC_state s, HM_chunkList es, objptr op)
+bool ES_add(GC_state s, HM_chunkList es, objptr op)
 {
 
   if (!mark_suspect(op))
   {
     /* if op is already in es, skip*/
-    return;
+    return FALSE;
   }
   s->cumulativeStatistics->numSuspectsMarked++;
-  HM_storeInChunkListWithPurpose(s, es, &op, sizeof(objptr), BLOCK_FOR_SUSPECTS);
+  struct ES_entry entry;
+  if (!ES_newEntry(s, op, &entry))
+    return FALSE;
+  HM_storeInChunkListWithPurpose(s, es, &entry, sizeof(struct ES_entry), BLOCK_FOR_SUSPECTS);
+  return TRUE;
 }
 
 int ES_foreachSuspect(
@@ -120,11 +362,13 @@ int ES_foreachSuspect(
     pointer frontier = HM_getChunkFrontier(chunk);
     while (p < frontier)
     {
-      // objptr* opp = (objptr*)p;
-      callIfIsObjptr(s, fObjptrClosure, (objptr *)p);
-      p += sizeof(void *);
+      /* p is an entry; the callback gets a pointer to its op field (the
+       * entry's first field) and finds the cell from there */
+      assert(isObjptr(((struct ES_entry *)p)->op));
+      callIfIsObjptr(s, fObjptrClosure, &(((struct ES_entry *)p)->op));
+      p += sizeof(struct ES_entry);
     }
-    count += ((int)(frontier - HM_getChunkStart(chunk)))/(sizeof(void*));
+    count += ((int)(frontier - HM_getChunkStart(chunk)))/(sizeof(struct ES_entry));
     chunk = chunk->nextChunk;
   }
   return count;
@@ -158,7 +402,7 @@ void ES_clear(GC_state s, HM_HierarchicalHeap hh)
   struct HM_chunkList oldList = *(es);
   HM_initChunkList(HM_HH_getSuspects(hh));
 
-  size_t numSuspects = HM_getChunkListUsedSize(&oldList) / sizeof(objptr);
+  size_t numSuspects = HM_getChunkListUsedSize(&oldList) / sizeof(struct ES_entry);
   if (numSuspects >= SUSPECTS_THRESHOLD) {
     timespec_now(&startTime);
   }
@@ -169,7 +413,8 @@ void ES_clear(GC_state s, HM_HierarchicalHeap hh)
     .thread = getThreadCurrent(s),
     .numMoved = 0,
     .numCleared = 0,
-    .numFailed = 0
+    .numFailed = 0,
+    .numDropped = 0
   };
   
   struct GC_foreachObjptrClosure fObjptrClosure =
@@ -180,7 +425,8 @@ void ES_clear(GC_state s, HM_HierarchicalHeap hh)
 #else
   ES_foreachSuspect(s, &oldList, &fObjptrClosure);
 #endif
-  s->cumulativeStatistics->numSuspectsCleared += numSuspects;
+  s->cumulativeStatistics->numSuspectsCleared += numSuspects; /* visited */
+  s->cumulativeStatistics->numSuspectBitsCleared += eargs.numCleared;
 
   HM_freeChunksInListWithInfo(s, &(oldList), NULL, BLOCK_FOR_SUSPECTS);
 
@@ -194,10 +440,11 @@ void ES_clear(GC_state s, HM_HierarchicalHeap hh)
     timespec_now(&stopTime);
     timespec_sub(&stopTime, &startTime);
     LOG(LM_HIERARCHICAL_HEAP, LL_FORCE,
-      "time to process %zu suspects (%zu cleared, %zu moved) at depth %u: %ld.%09ld",
+      "time to process %zu suspects (%zu cleared, %zu moved, %zu dropped) at depth %u: %ld.%09ld",
       numSuspects,
       eargs.numCleared,
       eargs.numMoved,
+      eargs.numDropped,
       HM_HH_getDepth(hh),
       (long)stopTime.tv_sec,
       stopTime.tv_nsec
@@ -210,7 +457,7 @@ size_t ES_numSuspects(
   __attribute__((unused)) GC_state s,
   HM_HierarchicalHeap hh)
 {
-  return HM_getChunkListUsedSize(HM_HH_getSuspects(hh)) / sizeof(objptr);
+  return HM_getChunkListUsedSize(HM_HH_getSuspects(hh)) / sizeof(struct ES_entry);
 }
 
 
@@ -266,26 +513,46 @@ size_t ES_numChunksInClearSet(
 
 void clear_suspect_par_safe(
   GC_state s,
-  objptr *opp,
-  objptr op,
+  struct ES_entry *entryp,
   struct HM_chunkList *output,
   size_t lenOutput)
 {
-  pointer p = objptrToPointer(op, NULL);
+  struct ES_entry entry = *entryp;
+  pointer p = objptrToPointer(entry.op, NULL);
+
+  if (!ES_lease(s, entry.op, entry.cell)) {
+    /* the object's chunk has been freed: nothing to clear */
+    s->cumulativeStatistics->numSuspectsDroppedDeadParClear++;
+    return;
+  }
+  ES_testLeaseDelay(s, ES_TEST_SITE_PAR_CLEAR);
+
   while (TRUE) {
     GC_header header = getHeader(p);
+    if (!(header & GC_VALID_HEADER_MASK)) {
+      /* A forwarding pointer: a local collection copied the object while
+       * this entry was in the clear set, out of the collection's sight. The
+       * copy keeps its suspect bit and has no entry (reads of it stay on the
+       * slow path). */
+      ES_release(s, entry.cell, TRUE);
+      s->cumulativeStatistics->numSuspectsDroppedForwardedParClear++;
+      return;
+    }
     uint32_t unpinDepth = (header & UNPIN_DEPTH_MASK) >> UNPIN_DEPTH_SHIFT;
 
     // Note: lenOutput == depth of heap whose suspects we are clearing
     if (pinType(header) == PIN_ANY && unpinDepth < lenOutput) {
       /* Not ready to be cleared; move it instead */
-      HM_storeInChunkListWithPurpose(s, &(output[unpinDepth]), opp, sizeof(objptr), BLOCK_FOR_SUSPECTS);
+      ES_release(s, entry.cell, FALSE);
+      HM_storeInChunkListWithPurpose(s, &(output[unpinDepth]), &entry, sizeof(struct ES_entry), BLOCK_FOR_SUSPECTS);
       return;
     }
 
     GC_header newHeader = header & ~(SUSPECT_MASK);
     if (__sync_bool_compare_and_swap(getHeaderp(p), header, newHeader)) {
       /* clearing successful */
+      ES_release(s, entry.cell, TRUE);
+      s->cumulativeStatistics->numSuspectBitsCleared++;
       return;
     }
     else {
@@ -325,12 +592,12 @@ ES_finishedClearSetGrain ES_processClearSetGrain(
     pointer frontier = HM_getChunkFrontier(chunk);
     while (p < frontier)
     {
-      objptr* opp = (objptr*)p;
-      objptr op = *opp;
-      if (isObjptr(op)) {
-        clear_suspect_par_safe(s, opp, op, output, es->depth);
+      struct ES_entry *entryp = (struct ES_entry *)p;
+      assert(isObjptr(entryp->op));
+      if (isObjptr(entryp->op)) {
+        clear_suspect_par_safe(s, entryp, output, es->depth);
       }
-      p += sizeof(objptr);
+      p += sizeof(struct ES_entry);
     }
   }
 
@@ -359,7 +626,7 @@ void ES_commitFinishedClearSetGrain(
 
 
 void ES_deleteClearSet(GC_state s, ES_clearSet es) {
-  s->cumulativeStatistics->numSuspectsCleared += es->numSuspects;
+  s->cumulativeStatistics->numSuspectsCleared += es->numSuspects; /* visited */
 
   for (size_t i = 0; i < es->lenChunkArray; i++) {
     HM_freeChunkWithInfo(s, es->chunkArray[i], NULL, BLOCK_FOR_SUSPECTS);

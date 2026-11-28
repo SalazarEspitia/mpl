@@ -11,6 +11,7 @@
 
 struct HM_chunk;
 struct HM_chunkList;
+struct ES_cell;
 typedef struct HM_chunk * HM_chunk;
 typedef struct HM_chunkList * HM_chunkList;
 
@@ -72,6 +73,13 @@ struct HM_chunk {
   bool retireChunk;
 
   bool mightContainMultipleObjects;
+
+  /* for sanity checks. It sits in the 4 bytes of padding after the four
+   * one-byte fields above, which leaves a whole word at the end of the header
+   * for suspectCell without changing the header's size (see the compile-time
+   * checks below). */
+  uint32_t magic;
+
   void* tmpHeap;
 
   SuperBlock container;
@@ -79,8 +87,12 @@ struct HM_chunk {
 
   decheck_tid_t decheckState;
 
-  // for padding and sanity checks
-  uint32_t magic;
+  /* The chunk's weak cell for entanglement suspects (ES_cell, in
+   * entanglement-suspects.h), or NULL while no object of this chunk has been
+   * in a suspect set. Installed by a CAS on the chunk's first suspect; the
+   * chunk holds one reference on it until HM_freeChunkWithInfo marks it dead.
+   * Atomic accesses only. */
+  struct ES_cell *suspectCell;
 
 } __attribute__((aligned(8)));
 
@@ -102,6 +114,21 @@ struct HM_chunkList {
 
 COMPILE_TIME_ASSERT(HM_chunk__aligned,
                     (sizeof(struct HM_chunk) % 8) == 0);
+
+/* With 8-byte pointers the header is 88 bytes, as it was before suspectCell:
+ * magic fills the padding at offset 44 and suspectCell takes the last word
+ * (which held magic and 4 bytes of padding). The size must not grow: the
+ * first object of a chunk starts right after the header, and 88 + 8 (its
+ * header word) keeps object pointers 16-aligned. */
+COMPILE_TIME_ASSERT(HM_chunk__size_unchanged,
+                    sizeof(void*) != 8 || sizeof(struct HM_chunk) == 88);
+COMPILE_TIME_ASSERT(HM_chunk__magic_in_padding,
+                    sizeof(void*) != 8
+                    || (offsetof(struct HM_chunk, magic) == 44
+                        && offsetof(struct HM_chunk, tmpHeap) == 48));
+COMPILE_TIME_ASSERT(HM_chunk__suspectCell_last_word,
+                    sizeof(void*) != 8
+                    || offsetof(struct HM_chunk, suspectCell) == 80);
 
 #endif /* MLTON_GC_INTERNAL_TYPES */
 

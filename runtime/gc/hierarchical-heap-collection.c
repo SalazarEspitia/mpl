@@ -1156,63 +1156,127 @@ objptr relocateObject(
 
 /* ========================================================================= */
 
-/* Is op pinned, but in a chunk this collection is about to free?
- *
- * A pinned object in scope survives the collection only if the collection
- * reaches it, through a remembered-set entry or from the roots: its chunk is
- * then moved to args->pinned[d] and marked pinnedDuringCollection. Every other
- * chunk of the from-space is freed. An object can keep its pin bits without
- * being reached: a CC drops the remembered-set entry of a PIN_ANY object whose
- * unpin depth is at least its depth, without unpinning it (see the comment in
- * forwardHHObjptr), and make_entangled pins objects reached through an
- * immutable object without adding an entry.
- */
-static bool isPinnedInFreedChunk(objptr op, struct ForwardHHObjptrArgs *args)
+/* PROTOTYPE (weak cells). Is this chunk in the from-space of this collection?
+ * The test forwardHHObjptr makes before it follows a forwarding pointer
+ * (depth in the collection's range, level head the from-space heap of that
+ * depth; a chunk this collection pinned keeps that level head). For a chunk
+ * that is live (the caller holds a lease on its cell) but may belong to
+ * another thread's heap or be under a concurrent collection's sweep: the
+ * level head is read once and may be NULL (the sweep clears it before it
+ * frees the chunk), and nothing is path-compressed. */
+static bool suspectChunkInFromSpace(HM_chunk chunk, struct ForwardHHObjptrArgs *args)
 {
-  /* Read the chunk's metadata only if the block is still a chunk. A suspect
-   * entry can outlive its chunk: a freed chunk's magic no longer matches, and
-   * its levelHead holds the free list's link. Such an entry is left as
-   * before. */
-  HM_chunk chunk = (HM_chunk)blockOf(objptrToPointer(op, NULL));
-  if (CHUNK_MAGIC != chunk->magic
-      || chunk->pinnedDuringCollection
-      || NULL == chunk->levelHead)
+  HM_UnionFindNode cursor = __atomic_load_n(&(chunk->levelHead), __ATOMIC_ACQUIRE);
+  if (NULL == cursor)
     return FALSE;
-  HM_HierarchicalHeap hh = HM_getLevelHead(chunk);
-  uint32_t depth = HM_HH_getDepth(hh);
-  return depth >= args->minDepth
-      && depth <= args->maxDepth
-      && args->fromSpace[depth] == hh;
+  while (TRUE) {
+    HM_UnionFindNode parent =
+      atomic_load_explicit(&(cursor->representative), memory_order_acquire);
+    if (NULL == parent)
+      break;
+    cursor = parent;
+  }
+  HM_HierarchicalHeap chunkHH = cursor->payload;
+  if (NULL == chunkHH)
+    return FALSE;
+  uint32_t chunkDepth = HM_HH_getDepth(chunkHH);
+  return chunkDepth >= args->minDepth && chunkDepth <= args->maxDepth
+         && args->fromSpace[chunkDepth] == chunkHH;
 }
 
+/* PROTOTYPE (weak cells, entanglement-suspects.h). For each entry of the
+ * suspect lists in scope: if this collection copied its object, the entry
+ * follows the copy (a new reference, on the cell of the copy's chunk); an
+ * entry at a forwarding pointer this collection cannot have written is
+ * dropped; every other entry is kept as it is. No test of pins is needed: if
+ * this collection frees the object's chunk, the chunk free marks the cell dead
+ * and the entry is dropped at its next use; and an entry whose chunk was freed
+ * earlier, by any collector, is dropped here. */
 void copySuspect(
   GC_state s,
-  __attribute__((unused)) objptr *opp,
+  objptr *opp,
   objptr op,
   void *rawArghh)
 {
   struct ForwardHHObjptrArgs *args = (struct ForwardHHObjptrArgs *)rawArghh;
   assert(isObjptr(op));
+  struct ES_entry entry = *(struct ES_entry *)opp;
+  assert(entry.op == op);
   pointer p = objptrToPointer(op, NULL);
-  objptr new_ptr = op;
-  if (hasFwdPtr(p))
-  {
-    new_ptr = getFwdPtr(p);
-  }
-  else if (!isPinned(op) || isPinnedInFreedChunk(op, args))
-  {
-    /* the suspect does not have a fwd-ptr, and is either not pinned or pinned
-     * in a chunk this collection frees ==> its garbage, so skip it. (Keeping
-     * the entry would leave it pointing into a freed chunk.)
-     */
+
+  if (!ES_lease(s, op, entry.cell)) {
+    s->cumulativeStatistics->numSuspectsDroppedDeadLGC++;
     return;
+  }
+  ES_testLeaseDelay(s, ES_TEST_SITE_LGC);
+  /* under the lease: the word is the object's header or a forwarding pointer
+   * (read once) */
+  GC_header header = getHeader(p);
+  if (isFwdHeader(header))
+  {
+    /* A forwarding pointer is followed only if this collection can have
+     * written it: the object's chunk (live, under the lease) is in this
+     * collection's from-space, as forwardHHObjptr requires. A live chunk can
+     * carry forwarding pointers of other collections: a collection keeps a
+     * chunk whole when an object in it is pinned, with the forwarding pointers
+     * of the objects it copied out of it, and another thread's collection
+     * writes them in its own chunks. Such a pointer may be stale (the copy
+     * moved again, or freed and its block reused), and following it would
+     * read and write the header of a block nothing protects. The entry is
+     * dropped, as the two clears drop an entry at a forwarding pointer: the
+     * word is no longer the object, so the entry can never be cleared; keeping
+     * it would only make every later pass visit it.
+     *
+     * NOT covered by this test: a chunk that an earlier collection of this
+     * heap kept (pinned) or retired to EBR can be in this collection's
+     * from-space again (a retired chunk's level head still leads to the
+     * from-space's heap record until EBR frees it), and an old forwarding
+     * pointer in it passes. That needs an entry that was out of the scope of
+     * the collection that copied its object and is in the scope of this one.
+     * Every collection that copies a suspect has the suspect's list in its
+     * scope (the lists of the heaps it collects), except for a clear set
+     * taken out of its heap. The clear drops the taken entries; the ones it
+     * puts back, in the grains' output lists, are of objects pinned below
+     * the clear's depth, which can't be unpinned, and so copied, before the
+     * commit. The debug runtime asserts that the target is in this
+     * collection's to-space. */
+    bool inScope = suspectChunkInFromSpace(HM_getChunkOf(p), args);
+    ES_release(s, entry.cell, TRUE);
+    if (!inScope) {
+      s->cumulativeStatistics->numSuspectsDroppedForwardedLGC++;
+      return;
+    }
+    objptr new_ptr = (objptr)header;
+    assert(isObjptr(new_ptr));
+    assert(isObjptrInToSpace(new_ptr, args));
+    if (!ES_newEntry(s, new_ptr, &entry))
+      return;
+  }
+  else
+  {
+#if ASSERT
+    /* Safe drops could hide a pin bug: a pinned suspect, not copied, in a
+     * chunk this collection is about to free (MPLLang/mpl#260's stale pins:
+     * pin bits left on an object that no remembered-set entry reaches). The
+     * entry will die with the chunk; count it, so such objects stay visible.
+     * Under the lease the chunk is live, but it may be another thread's, or
+     * under a concurrent collection's sweep, which sets its level head to
+     * NULL before freeing it: suspectChunkInFromSpace reads the level head
+     * once. The count is exact for chunks of this collection's from-space,
+     * which only this collection changes. */
+    HM_chunk chunk = HM_getChunkOf(p);
+    if (isPinned(op) && suspectChunkInFromSpace(chunk, args)
+        && !chunk->pinnedDuringCollection)
+      s->cumulativeStatistics->numSuspectsPinnedInChunkLGCFrees++;
+#endif
+    ES_release(s, entry.cell, FALSE);
   }
   uint32_t opDepth = args->toDepth;
   HM_storeInChunkListWithPurpose(
     s,
     HM_HH_getSuspects(toSpaceHH(s, args, opDepth)),
-    &new_ptr,
-    sizeof(objptr),
+    &entry,
+    sizeof(struct ES_entry),
     BLOCK_FOR_SUSPECTS);
 }
 

@@ -114,6 +114,44 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
            uintmaxToCommaString (cumulativeStatistics->bytesReclaimedByCC));
   fprintf (out, "max stack size: %s bytes\n",
            uintmaxToCommaString (cumulativeStatistics->maxStackSize));
+  /* PROTOTYPE: weak cells (entanglement-suspects.h) */
+  /* "entries visited by clears" counts every entry a clear at a join looked
+   * at (an entry moved to a shallower list is counted again later), so it can
+   * exceed "marked"; "bits cleared" counts the clears that succeeded. Per
+   * processor these lines do not balance (an entry is made on one processor
+   * and dropped on another; so are cells); the sums over processors do:
+   * marked = bits cleared + dropped dead + dropped forwarded + entries still
+   * in lists at exit. */
+  fprintf (out, "suspects: marked %"PRIuMAX", marked by entangled reads %"PRIuMAX", entries visited by clears %"PRIuMAX", bits cleared %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectsMarked,
+           cumulativeStatistics->numSuspectsMarkedEntangled,
+           cumulativeStatistics->numSuspectsCleared,
+           cumulativeStatistics->numSuspectBitsCleared);
+  fprintf (out, "suspect cells: allocated %"PRIuMAX", freed %"PRIuMAX", lost install races %"PRIuMAX", chunk frees that waited for a lease %"PRIuMAX", lease wait retries %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectCellsAllocated,
+           cumulativeStatistics->numSuspectCellsFreed,
+           cumulativeStatistics->numSuspectCellInstallRaces,
+           cumulativeStatistics->numSuspectCellLeaseWaits,
+           cumulativeStatistics->numSuspectCellLeaseRetries);
+  fprintf (out, "suspect chunks freed: with a cell %"PRIuMAX", with entries outstanding %"PRIuMAX" (%"PRIuMAX" entries)\n",
+           cumulativeStatistics->numChunksFreedWithSuspectCell,
+           cumulativeStatistics->numChunksFreedWithSuspectEntries,
+           cumulativeStatistics->numSuspectEntriesOutlivedChunk);
+  fprintf (out, "suspect entries dropped dead: clear %"PRIuMAX", parallel clear %"PRIuMAX", local collection %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectsDroppedDeadClear,
+           cumulativeStatistics->numSuspectsDroppedDeadParClear,
+           cumulativeStatistics->numSuspectsDroppedDeadLGC);
+  fprintf (out, "suspect entries dropped forwarded: clear %"PRIuMAX", parallel clear %"PRIuMAX", local collection %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectsDroppedForwardedClear,
+           cumulativeStatistics->numSuspectsDroppedForwardedParClear,
+           cumulativeStatistics->numSuspectsDroppedForwardedLGC);
+#if ASSERT
+  if (cumulativeStatistics->numSuspectTestLeaseUses > 0)
+    fprintf (out, "suspect test (debug runtime, MPL_ES_TEST_LEASE_SLEEP): lease sleeps %"PRIuMAX"\n",
+             cumulativeStatistics->numSuspectTestLeaseSleeps);
+  fprintf (out, "suspects pinned in a chunk a local collection frees (debug runtime): %"PRIuMAX"\n",
+           cumulativeStatistics->numSuspectsPinnedInChunkLGCFrees);
+#endif
 }
 
 static void displayCumulativeStatisticsJSON (FILE *out, GC_state s) {

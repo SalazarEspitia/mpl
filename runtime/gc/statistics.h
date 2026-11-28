@@ -72,7 +72,27 @@ struct GC_cumulativeStatistics {
   uintmax_t numEntanglements;         // count instances entanglement is detected
   uintmax_t numChecksSkipped;
   uintmax_t numSuspectsMarked;
-  uintmax_t numSuspectsCleared;
+  uintmax_t numSuspectsMarkedEntangled;        /* of those, by an entangled read (decheck): the entry is in the reader's list, the object in another thread's heap */
+  uintmax_t numSuspectsCleared;                /* entries visited by the clears at joins: cleared, dropped, moved or failed alike (an entry moved to a shallower list is visited again at a later join) */
+  uintmax_t numSuspectBitsCleared;             /* of those, the entries whose object had its suspect bit cleared */
+  /* PROTOTYPE: weak cells (entanglement-suspects.h) */
+  uintmax_t numSuspectCellsAllocated;
+  uintmax_t numSuspectCellsFreed;
+  uintmax_t numSuspectCellInstallRaces;        /* cells allocated for a chunk's first suspect and discarded: another processor installed the chunk's cell first */
+  uintmax_t numSuspectCellLeaseWaits;          /* chunk frees that had to wait because an entry of the chunk was in use */
+  uintmax_t numSuspectCellLeaseRetries;        /* the retries of those waits, in all */
+  uintmax_t numChunksFreedWithSuspectCell;
+  uintmax_t numChunksFreedWithSuspectEntries;  /* ... while entries still pointed into the chunk */
+  uintmax_t numSuspectEntriesOutlivedChunk;    /* those entries */
+  uintmax_t numSuspectsDroppedDeadClear;       /* entries dropped because their chunk was gone: clear at a join */
+  uintmax_t numSuspectsDroppedDeadParClear;    /* ... parallel clear at a join */
+  uintmax_t numSuspectsDroppedDeadLGC;         /* ... a local collection's pass over the suspects in its scope */
+  uintmax_t numSuspectsDroppedForwardedClear;    /* entries dropped in a live chunk at a forwarding pointer: clear at a join */
+  uintmax_t numSuspectsDroppedForwardedParClear; /* ... parallel clear at a join */
+  uintmax_t numSuspectsDroppedForwardedLGC;      /* ... a local collection's pass, at a forwarding pointer in a chunk outside its from-space */
+  uintmax_t numSuspectTestLeaseUses;           /* debug runtime only, test only (MPL_ES_TEST_LEASE_SLEEP): uses of an entry at the chosen sites */
+  uintmax_t numSuspectTestLeaseSleeps;         /* ... and the sleeps taken while holding a lease */
+  uintmax_t numSuspectsPinnedInChunkLGCFrees;  /* debug runtime only: pinned, uncopied suspects in a chunk a local collection frees */
   uintmax_t bytesPinnedEntangled;
   uintmax_t currentPhaseBytesPinnedEntangled;
   uintmax_t bytesPinnedEntangledWatermark;
