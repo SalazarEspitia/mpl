@@ -154,14 +154,27 @@ size_t HM_HH_addRecentBytesAllocated(GC_thread thread, size_t bytes);
 
 uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread);
 
-/* TRUE while no scheduler is running and the thread runs at depth 0. Its
- * root heap can then be collected locally (see HM_HHC_collectLocal). */
+/* TRUE while no scheduler is running and the thread runs at depth 0 in the
+ * main root heap. That heap can then be collected locally (see
+ * HM_HHC_collectLocal). */
 bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread);
 
 /* Root-heap collections end for good once a thread whose heap is at depth 0
  * is moved deeper (the scheduler's boot); see GC_HH_setDepth. */
 void HM_HH_endRootHeapCollections(void);
 bool HM_HH_rootHeapCollectionsEnded(void);
+
+/* TRUE until the scheduler's boot: until it moves the original thread off
+ * depth 0, or until Parallel_init, whichever comes first. */
+bool HM_HH_beforeBoot(GC_state s);
+
+/* The depth-0 heaps made before the boot (see hierarchical-heap.c): the
+ * main one, set by initWorld, and all of them, noted by newThreadWithHeap. */
+void HM_HH_setMainRootHeap(HM_HierarchicalHeap hh);
+void HM_HH_notePreBootRootHeap(GC_state s, HM_HierarchicalHeap hh);
+size_t HM_HH_numPreBootRootHeaps(void);
+HM_HierarchicalHeap HM_HH_preBootRootHeap(size_t i);
+bool HM_HH_isPreBootRootHeap(HM_HierarchicalHeap hh);
 
 void HM_HH_forceLeftHeap(GC_state s, uint32_t processor, pointer threadp);
 void HM_HH_forceNewChunk(GC_state s);
