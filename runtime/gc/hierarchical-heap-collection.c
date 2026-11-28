@@ -842,6 +842,7 @@ void HM_HHC_collectLocal(GC_state s, uint32_t desiredScope)
 
   /* update currentChunk and associated */
   HM_chunk lastChunk = NULL;
+  uint32_t lastChunkDepth = 0;
   for (HM_HierarchicalHeap cursor = hh;
        NULL != cursor;
        cursor = cursor->nextAncestor)
@@ -849,12 +850,25 @@ void HM_HHC_collectLocal(GC_state s, uint32_t desiredScope)
     if (HM_getChunkListLastChunk(HM_HH_getChunkList(cursor)) != NULL)
     {
       lastChunk = HM_getChunkListLastChunk(HM_HH_getChunkList(cursor));
+      lastChunkDepth = HM_HH_getDepth(cursor);
       break;
     }
   }
   thread->currentChunk = lastChunk;
 
-  if (lastChunk != NULL && !lastChunk->mightContainMultipleObjects)
+  /* Never resume allocating in a chunk of the root heap (depth 0) once the
+   * thread is deeper: the root heap is never collected, and anything stored
+   * into an object there is pinned until exit. */
+  bool resumeAtDepth0 =
+    lastChunk != NULL && lastChunkDepth == 0 && thread->currentDepth > 0;
+  if (resumeAtDepth0 && lastChunk->mightContainMultipleObjects) {
+    LOG(LM_HH_COLLECTION, LL_DEBUG,
+        "not resuming in a depth-0 chunk at depth %"PRIu32,
+        thread->currentDepth);
+  }
+
+  if (lastChunk != NULL &&
+      (!lastChunk->mightContainMultipleObjects || resumeAtDepth0))
   {
     if (!HM_HH_extend(s, thread, GC_HEAP_LIMIT_SLOP))
     {
