@@ -20,7 +20,11 @@ static inline void rusageMultiply (struct rusage *ru1,
                                    struct rusage *ru);
 static inline uintmax_t rusageTime (struct rusage *ru);
 static inline void startTiming (struct rusage *ru_start);
-static uintmax_t stopTiming (struct rusage *ru_start, struct rusage *ru_gc);
+/* Reads the thread's resource usage once and adds the difference from
+ * ru_start to ru_acc1 and, unless it is NULL, to ru_acc2. */
+static void stopTiming (struct rusage *ru_start,
+                        struct rusage *ru_acc1,
+                        struct rusage *ru_acc2);
 
 void timespec_now(struct timespec *x);
 /* compute dst = dst - x. requires that dst >= x. */

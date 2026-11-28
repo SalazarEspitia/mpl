@@ -19,13 +19,18 @@ void GC_displayMem (void) {
         (void)system (buffer);
 }
 
+/* The calling thread's port is looked up once per thread and kept (one
+ * port right per thread, until the process exits): mach_thread_self and
+ * mach_port_deallocate on every call made a reading about twice as slow. */
+static _Thread_local mach_port_t getrusage_thread_port = MACH_PORT_NULL;
+
 int getrusage_thread(struct rusage *rusage) {
         thread_basic_info_data_t info;
         mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
 
-        mach_port_t thread = mach_thread_self();
-        kern_return_t kr = thread_info(thread, THREAD_BASIC_INFO, (thread_info_t)&info, &count);
-        mach_port_deallocate(mach_task_self(), thread);
+        if (getrusage_thread_port == MACH_PORT_NULL)
+                getrusage_thread_port = mach_thread_self();
+        kern_return_t kr = thread_info(getrusage_thread_port, THREAD_BASIC_INFO, (thread_info_t)&info, &count);
 
         if (kr == KERN_SUCCESS && (info.flags & TH_FLAGS_IDLE) == 0) {
         memset(rusage, 0, sizeof(struct rusage));

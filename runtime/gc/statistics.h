@@ -89,6 +89,13 @@ struct GC_cumulativeStatistics {
   struct rusage ru_gcMinor; /* resource usage in minor copying gcs. */
   struct rusage ru_gcHHLocal; /**< Resource usage during Hierachical Heap local
                                * collections */
+  struct rusage ru_gcCC; /* resource usage in concurrent collections, on the
+                          * processor that ran them */
+  /* The processor's thread's resource usage over the whole run, recorded
+   * when the thread stops (GC_PthreadAtExit); ruThreadRecorded says whether
+   * it has been. */
+  struct rusage ru_thread;
+  bool ruThreadRecorded;
 
   struct rusage ru_crit; /* total time in critical sections */
   struct rusage ru_sync; /* total time synchronizing for critical sections */

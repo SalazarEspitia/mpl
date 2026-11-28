@@ -109,4 +109,7 @@ bool GC_TryToTerminate(GC_state s) {
 PRIVATE void GC_PthreadAtExit(GC_state s) {
   getStackCurrent(s)->used = sizeofGCStateCurrentStackUsed (s);
   getThreadCurrent(s)->exnStack = s->exnStack;
+  /* for gc-summary's per-processor total time */
+  if (0 == getrusage_thread (&(s->cumulativeStatistics->ru_thread)))
+    s->cumulativeStatistics->ruThreadRecorded = TRUE;
 }

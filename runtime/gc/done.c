@@ -68,17 +68,19 @@ static uintmax_t timespecToMillis (struct timespec *t) {
   return (uintmax_t)t->tv_sec * 1000 + (uintmax_t)t->tv_nsec / 1000000;
 }
 
+static uintmax_t timevalToMillis (struct timeval *t) {
+  return (uintmax_t)t->tv_sec * 1000 + (uintmax_t)t->tv_usec / 1000;
+}
+
 static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatistics *cumulativeStatistics) {
-  struct rusage ru_total;
   uintmax_t totalTime;
   uintmax_t gcTime;
 
-#ifdef __MACH__
-  getrusage_thread (&ru_total);
-#else
-  getrusage (RUSAGE_THREAD, &ru_total);
-#endif
-  totalTime = rusageTime (&ru_total);
+  /* The processor's own thread's CPU time, recorded when it stopped. A
+   * processor still in a concurrent collection when the program ended
+   * isn't waited for, and has none. */
+  bool haveTotal = cumulativeStatistics->ruThreadRecorded;
+  totalTime = haveTotal ? rusageTime (&cumulativeStatistics->ru_thread) : 0;
   gcTime = rusageTime (&cumulativeStatistics->ru_gc);
   fprintf (out, "GC type\t\ttime ms\t number\t\t  bytes\t      bytes/sec\n");
   fprintf (out, "-------------\t-------\t-------\t---------------\t---------------\n");
@@ -87,12 +89,21 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
        &cumulativeStatistics->ru_gcHHLocal,
        cumulativeStatistics->numHHLocalGCs,
        cumulativeStatistics->bytesHHLocaled);
-  fprintf (out, "total time: %s ms\n",
-           uintmaxToCommaString (totalTime));
-  fprintf (out, "total GC time: %s ms (%.1f%%)\n",
-           uintmaxToCommaString (gcTime),
-           (0 == totalTime) ?
-           0.0 : 100.0 * ((double) gcTime) / (double)totalTime);
+  if (haveTotal)
+    fprintf (out, "total time: %s ms (user %s ms, system %s ms)\n",
+             uintmaxToCommaString (totalTime),
+             uintmaxToCommaString (timevalToMillis (&cumulativeStatistics->ru_thread.ru_utime)),
+             uintmaxToCommaString (timevalToMillis (&cumulativeStatistics->ru_thread.ru_stime)));
+  else
+    fprintf (out, "total time: not recorded (the processor was still running at exit)\n");
+  if (haveTotal)
+    fprintf (out, "total GC time: %s ms (%.1f%%)\n",
+             uintmaxToCommaString (gcTime),
+             (0 == totalTime) ?
+             0.0 : 100.0 * ((double) gcTime) / (double)totalTime);
+  else
+    fprintf (out, "total GC time: %s ms\n",
+             uintmaxToCommaString (gcTime));
   fprintf (out, "total bytes allocated: %s bytes\n",
            uintmaxToCommaString (cumulativeStatistics->bytesAllocated));
   fprintf (out, "local collections: %s\n",
@@ -100,6 +111,9 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
   fprintf (out, "local collections: wall time: %s ms, plus %s ms on remembered sets\n",
            uintmaxToCommaString (timespecToMillis (&cumulativeStatistics->timeLocalGC)),
            uintmaxToCommaString (timespecToMillis (&cumulativeStatistics->timeLocalPromo)));
+  fprintf (out, "local collections: cpu time: user %s ms, system %s ms\n",
+           uintmaxToCommaString (timevalToMillis (&cumulativeStatistics->ru_gcHHLocal.ru_utime)),
+           uintmaxToCommaString (timevalToMillis (&cumulativeStatistics->ru_gcHHLocal.ru_stime)));
   fprintf (out, "local collections: bytes in scope: %s bytes\n",
            uintmaxToCommaString (cumulativeStatistics->bytesInScopeForLocal));
   fprintf (out, "local collections: bytes reclaimed: %s bytes\n",
@@ -108,6 +122,9 @@ static void displayCumulativeStatistics (FILE *out, struct GC_cumulativeStatisti
            uintmaxToCommaString (cumulativeStatistics->numCCs));
   fprintf (out, "concurrent collections: wall time: %s ms\n",
            uintmaxToCommaString (timespecToMillis (&cumulativeStatistics->timeCC)));
+  fprintf (out, "concurrent collections: cpu time: user %s ms, system %s ms\n",
+           uintmaxToCommaString (timevalToMillis (&cumulativeStatistics->ru_gcCC.ru_utime)),
+           uintmaxToCommaString (timevalToMillis (&cumulativeStatistics->ru_gcCC.ru_stime)));
   fprintf (out, "concurrent collections: bytes in scope: %s bytes\n",
            uintmaxToCommaString (cumulativeStatistics->bytesInScopeForCC));
   fprintf (out, "concurrent collections: bytes reclaimed: %s bytes\n",
