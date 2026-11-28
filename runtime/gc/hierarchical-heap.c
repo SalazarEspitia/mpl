@@ -1319,11 +1319,68 @@ size_t HM_HH_addRecentBytesAllocated(GC_thread thread, size_t bytes) {
   return thread->bytesAllocatedSinceLastCollection;
 }
 
-uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread)
+/* Set once the scheduler's boot has started: GC_HH_setDepth sets it when it
+ * moves a thread whose heap is at depth 0 to a deeper depth, which the boot
+ * does to the original thread just before Parallel_init. Only one processor
+ * runs SML code until Parallel_init, so a plain flag is enough. */
+static bool bootStarted = FALSE;
+
+void HM_HH_noteBootStarted(void) {
+  bootStarted = TRUE;
+}
+
+/* Before the scheduler's boot only this processor runs SML code: the others
+ * wait in Proc_waitForInitialization until MLton.Parallel.initializeProcessors
+ * (Parallel_init). A program that never loads the scheduler stays in this
+ * state. TRUE until the boot moves the original thread off depth 0, or until
+ * Parallel_init, whichever comes first; FALSE for good after that, at the
+ * cost of one load. */
+bool HM_HH_beforeBoot(GC_state s) {
+  return !bootStarted && !Proc_isInitialized(s);
+}
+
+/* For the debug runtime's checks of the heap before the boot. The other
+ * processors' initial threads (duplicateWorld) each have a depth-0 heap of
+ * their own, which holds a fresh thread and an empty stack: TRUE if hh is
+ * one of those. */
+bool HM_HH_isOtherInitialHeap(GC_state s, HM_HierarchicalHeap hh) {
+  for (uint32_t p = 0; p < s->numberOfProcs; p++) {
+    GC_state ps = &(s->procStates[p]);
+    if (ps == s || BOGUS_OBJPTR == ps->currentThread)
+      continue;
+    if (threadObjptrToStruct(s, ps->currentThread)->hierarchicalHeap == hh)
+      return TRUE;
+  }
+  return FALSE;
+}
+
+/* TRUE if nothing is remembered in hh, privately or publicly. */
+bool HM_HH_remembersNothing(HM_HierarchicalHeap hh) {
+  return 0 == HM_numRemembered(HM_HH_getRemSet(hh))
+         && NULL == HM_HH_getRemSet(hh)->public.firstChunk;
+}
+
+/* Before the boot this processor is the only one running SML code, no
+ * deque is registered, and the running thread holds the program's one heap
+ * (see GC_switchToThread). That heap can then be collected like a leaf
+ * heap, with the full root set (see HM_HHC_collectLocal). Once the boot has
+ * started, depth 0 is never collected, as before. */
+bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread) {
+  return s->wsQueueTop == BOGUS_OBJPTR
+         && HM_HH_beforeBoot(s)
+         && 0 == thread->currentDepth
+         && 0 == HM_HH_getDepth(thread->hierarchicalHeap);
+}
+
+uint32_t HM_HH_desiredCollectionScope(
+  GC_state s,
+  GC_thread thread,
+  bool rootHeap)
 {
   struct HM_HierarchicalHeap* hh = thread->hierarchicalHeap;
+  assert(rootHeap == HM_HH_canCollectRootHeap(s, thread));
 
-  if (s->wsQueueTop == BOGUS_OBJPTR)
+  if (s->wsQueueTop == BOGUS_OBJPTR && !rootHeap)
     return thread->currentDepth+1; /* don't collect */
 
   if (thread->bytesAllocatedSinceLastCollection <
@@ -1332,8 +1389,11 @@ uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread)
     return thread->currentDepth+1; /* don't collect */
   }
 
-  uint64_t topval = *(uint64_t*)objptrToPointer(s->wsQueueTop, NULL);
-  uint32_t potentialLocalScope = UNPACK_IDX(topval);
+  uint32_t potentialLocalScope = 0;
+  if (!rootHeap) {
+    uint64_t topval = *(uint64_t*)objptrToPointer(s->wsQueueTop, NULL);
+    potentialLocalScope = UNPACK_IDX(topval);
+  }
 
   size_t budget = 4 * thread->bytesAllocatedSinceLastCollection;
 

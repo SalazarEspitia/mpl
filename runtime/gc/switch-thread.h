@@ -9,6 +9,8 @@
 #if (defined (MLTON_GC_INTERNAL_FUNCS))
 
 static inline void switchToThread (GC_state s, objptr op);
+static void handOverHeap (GC_thread from, GC_thread to);
+static void handOverHeapBeforeBoot (GC_state s, GC_thread from, GC_thread to);
 
 #endif /* (defined (MLTON_GC_INTERNAL_FUNCS)) */
 

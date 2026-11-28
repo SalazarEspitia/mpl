@@ -152,7 +152,25 @@ void HM_HH_updateValues(GC_state s, GC_thread thread, pointer frontier);
 size_t HM_HH_nextCollectionThreshold(GC_state s, size_t survivingSize);
 size_t HM_HH_addRecentBytesAllocated(GC_thread thread, size_t bytes);
 
-uint32_t HM_HH_desiredCollectionScope(GC_state s, GC_thread thread);
+/* rootHeap: HM_HH_canCollectRootHeap(s, thread), computed by the caller. */
+uint32_t HM_HH_desiredCollectionScope(
+  GC_state s,
+  GC_thread thread,
+  bool rootHeap);
+
+/* TRUE until the scheduler's boot (see hierarchical-heap.c), which
+ * GC_HH_setDepth notes. */
+bool HM_HH_beforeBoot(GC_state s);
+void HM_HH_noteBootStarted(void);
+
+/* TRUE before the boot, at depth 0: the running thread's heap, the
+ * program's one heap then, can be collected locally (see
+ * HM_HHC_collectLocal). */
+bool HM_HH_canCollectRootHeap(GC_state s, GC_thread thread);
+
+/* for assertions about the heap before the boot (see hierarchical-heap.c) */
+bool HM_HH_isOtherInitialHeap(GC_state s, HM_HierarchicalHeap hh);
+bool HM_HH_remembersNothing(HM_HierarchicalHeap hh);
 
 void HM_HH_forceLeftHeap(GC_state s, uint32_t processor, pointer threadp);
 void HM_HH_forceNewChunk(GC_state s);

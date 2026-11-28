@@ -60,6 +60,10 @@ void switchToSignalHandlerThreadIfNonAtomicAndSignalPending (GC_state s) {
     //   (void*)getThreadCurrent(s),
     //   (void*)threadObjptrToStruct(s, s->signalHandlerThread));
 
+    if (HM_HH_beforeBoot(s))
+      handOverHeapBeforeBoot(s, getThreadCurrent(s),
+        threadObjptrToStruct(s, s->signalHandlerThread));
+
     // SAM_NOTE: synchronizes with loop in switchToThread...
     atomicStoreS32(&(getThreadCurrent(s)->currentProcNum), -1);
     s->currentThread = BOGUS_OBJPTR;
@@ -287,41 +291,21 @@ pointer GC_handlerEnterHeapOfThread(GC_state s, objptr threadp) {
   assert(getThreadCurrent(s)->currentDepth == 0);
   assert(target->currentProcNum == -1);
 
+  if (NULL == target->hierarchicalHeap) {
+    /* Before the scheduler's boot the program has one heap, and the switch
+     * to this handler has handed it over already: nothing to do. */
+    assert(HM_HH_beforeBoot(s));
+    s->savedThreadDuringSignalHandler = threadp;
+    leave(s);
+    return NULL;
+  }
+
   HM_HierarchicalHeap abandonedHH = getThreadCurrent(s)->hierarchicalHeap;
 
   // copy thread details to current thread
   getThreadCurrent(s)->spareHeartbeatTokens = target->spareHeartbeatTokens;
-  getThreadCurrent(s)->currentDepth = target->currentDepth;
-  getThreadCurrent(s)->currentChunk = target->currentChunk;
-  getThreadCurrent(s)->hierarchicalHeap = target->hierarchicalHeap;
-  getThreadCurrent(s)->bytesAllocatedSinceLastCollection =
-    target->bytesAllocatedSinceLastCollection;
-  getThreadCurrent(s)->bytesSurvivedLastCollection =
-    target->bytesSurvivedLastCollection;
   getThreadCurrent(s)->minLocalCollectionDepth = target->minLocalCollectionDepth;
-
-#ifdef DETECT_ENTANGLEMENT
-  getThreadCurrent(s)->decheckState = target->decheckState;
-
-  // LOG(LM_THREAD, LL_FORCE,
-  //   "handler thread %p got decheckState %lu from thread %p",
-  //   (void*)getThreadCurrent(s),
-  //   target->decheckState.bits,
-  //   (void*)target);
-
-  uint32_t* fromSyncDepths = &(target->decheckSyncDepths[0]);
-  uint32_t* toSyncDepths = &(getThreadCurrent(s)->decheckSyncDepths[0]);
-  memcpy(toSyncDepths, fromSyncDepths, DECHECK_DEPTHS_LEN * sizeof(uint32_t));
-#endif
-
-  // clear out some stuff for my sanity
-  target->currentChunk = NULL;
-  target->hierarchicalHeap = NULL;
-  target->bytesAllocatedSinceLastCollection = 0;
-  target->bytesSurvivedLastCollection = 0;
-#ifdef DETECT_ENTANGLEMENT
-  target->decheckState = DECHECK_BOGUS_TID;
-#endif
+  handOverHeap(target, getThreadCurrent(s));
 
   s->frontier = HM_HH_getFrontier(getThreadCurrent(s));
   s->limitPlusSlop = HM_HH_getLimit(getThreadCurrent(s));
@@ -353,29 +337,19 @@ void GC_handlerLeaveHeapOfThread(
   assert(target->currentProcNum == -1);
   assert(s->savedThreadDuringSignalHandler == threadp);
 
+  if (NULL == abandonedHH) {
+    /* Before the scheduler's boot (see GC_handlerEnterHeapOfThread): this
+     * handler keeps the one heap, and the switch to the thread to continue
+     * with hands it over. */
+    assert(NULL == target->hierarchicalHeap);
+    s->savedThreadDuringSignalHandler = BOGUS_OBJPTR;
+    leave(s);
+    return;
+  }
+
   target->spareHeartbeatTokens = getThreadCurrent(s)->spareHeartbeatTokens;
-  target->currentDepth = getThreadCurrent(s)->currentDepth;
-  target->currentChunk = getThreadCurrent(s)->currentChunk;
-  target->hierarchicalHeap = getThreadCurrent(s)->hierarchicalHeap;
-  target->bytesAllocatedSinceLastCollection =
-    getThreadCurrent(s)->bytesAllocatedSinceLastCollection;
-  target->bytesSurvivedLastCollection =
-    getThreadCurrent(s)->bytesSurvivedLastCollection;
   target->minLocalCollectionDepth = getThreadCurrent(s)->minLocalCollectionDepth;
-
-#ifdef DETECT_ENTANGLEMENT
-  target->decheckState = getThreadCurrent(s)->decheckState;
-
-  // LOG(LM_THREAD, LL_FORCE,
-  //   "handler thread %p put back decheckState %lu into thread %p",
-  //   (void*)getThreadCurrent(s),
-  //   target->decheckState.bits,
-  //   (void*)target);
-
-  uint32_t* fromSyncDepths = &(getThreadCurrent(s)->decheckSyncDepths[0]);
-  uint32_t* toSyncDepths = &(target->decheckSyncDepths[0]);
-  memcpy(toSyncDepths, fromSyncDepths, DECHECK_DEPTHS_LEN * sizeof(uint32_t));
-#endif
+  handOverHeap(getThreadCurrent(s), target);
 
   HM_HierarchicalHeap originalHH = (HM_HierarchicalHeap)abandonedHH;
   assert(HM_HH_getDepth(originalHH) == 0);
