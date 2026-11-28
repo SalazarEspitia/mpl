@@ -326,42 +326,212 @@ bool decheckIsOrdered(GC_thread thread, decheck_tid_t t1) {
 
 #ifdef DETECT_ENTANGLEMENT
 
+/* An explicit stack of objects still to visit, for the traversals below
+ * (make_entangled, and traverseAndCheck in the debug runtime): a recursive
+ * traversal of a long immutable structure, e.g. a list, overflows a worker
+ * thread's C stack, one call per pointer hop. The stack lives on the C stack
+ * while it's small, else on the C heap.
+ *
+ * A frame is an object to visit, or an object being expanded: its fields are
+ * visited one at a time, in the order foreachObjptrInObject visits them, from
+ * cur up to end. So the visits are in the recursion's order, and the stack
+ * holds one frame per object on the current path, as the recursion did (a
+ * stack object's fields are the exception: they are pushed all at once).
+ */
+struct ME_frame {
+  objptr *opp;          /* where the pointer to the object is */
+  objptr ptr;           /* expanded: the object, as first read */
+  pointer cur;          /* expanded: the next field to visit */
+  pointer end;          /* expanded: just past the last field */
+  uint32_t unpinDepth;  /* the unpin depth the object must have */
+  uint32_t childDepth;  /* expanded: the unpin depth its fields must have */
+  uint16_t bytesNonObjptrs; /* expanded: its layout (normal and weak objects, */
+  uint16_t numObjptrs;      /* and each sequence element) */
+  uint16_t fieldIndex;  /* expanded: cur's index among its element's objptrs */
+  bool expanded;        /* immutable: its fields are being visited */
+  bool addToRemSet;     /* the root of this manage_entangled call */
+};
+
+#define ME_INLINE_FRAMES 64
+
+struct ME_stack {
+  struct ME_frame *frames;
+  size_t size;
+  size_t capacity;
+  struct ME_frame inlineFrames[ME_INLINE_FRAMES];
+};
+
+static void ME_init(struct ME_stack *st) {
+  st->frames = st->inlineFrames;
+  st->size = 0;
+  st->capacity = ME_INLINE_FRAMES;
+}
+
+static void ME_free(struct ME_stack *st) {
+  if (st->frames != st->inlineFrames)
+    free(st->frames);
+}
+
+static void ME_push(struct ME_stack *st, struct ME_frame f) {
+  if (st->size == st->capacity) {
+    size_t newCapacity = 2 * st->capacity;
+    struct ME_frame *newFrames =
+      (struct ME_frame *) malloc_safe(newCapacity * sizeof(struct ME_frame));
+    memcpy(newFrames, st->frames, st->size * sizeof(struct ME_frame));
+    if (st->frames != st->inlineFrames)
+      free(st->frames);
+    st->frames = newFrames;
+    st->capacity = newCapacity;
+  }
+  st->frames[st->size++] = f;
+}
+
+static void ME_pushVisit(struct ME_stack *st, objptr *opp, uint32_t unpinDepth) {
+  struct ME_frame f =
+    {.opp = opp, .ptr = BOGUS_OBJPTR, .cur = NULL, .end = NULL,
+     .unpinDepth = unpinDepth, .childDepth = 0,
+     .bytesNonObjptrs = 0, .numObjptrs = 0, .fieldIndex = 0,
+     .expanded = false, .addToRemSet = false};
+  ME_push(st, f);
+}
+
+struct ME_pushArgs {
+  struct ME_stack *stack;
+  uint32_t unpinDepth;
+};
+
+static void ME_pushField(
+  __attribute__((unused)) GC_state s,
+  objptr *opp,
+  __attribute__((unused)) objptr op,
+  void *rawArgs)
+{
+  struct ME_pushArgs *args = (struct ME_pushArgs *) rawArgs;
+  ME_pushVisit(args->stack, opp, args->unpinDepth);
+}
+
+/* Push f, the object at p, as expanded: its fields are to be visited at
+ * childDepth. Normal and weak objects and sequences are stepped through one
+ * field at a time (ME_nextField), as foreachObjptrInObject walks them. A
+ * stack's fields are all pushed now, in reverse, so they are visited in
+ * foreachObjptrInObject's order too. */
+static void ME_pushExpanded(
+  GC_state s,
+  struct ME_stack *st,
+  struct ME_frame f,
+  pointer p,
+  uint32_t childDepth)
+{
+  GC_objectTypeTag tag;
+  uint16_t bytesNonObjptrs, numObjptrs;
+  splitHeader(s, getRacyHeader(p), &tag, NULL, &bytesNonObjptrs, &numObjptrs);
+
+  f.expanded = true;
+  f.childDepth = childDepth;
+  f.bytesNonObjptrs = bytesNonObjptrs;
+  f.numObjptrs = numObjptrs;
+  f.fieldIndex = 0;
+  f.cur = p + bytesNonObjptrs;
+  if (NORMAL_TAG == tag || WEAK_TAG == tag) {
+    f.end = f.cur + numObjptrs * OBJPTR_SIZE;
+  }
+  else if (SEQUENCE_TAG == tag && numObjptrs > 0) {
+    size_t bytesPerElement = bytesNonObjptrs + numObjptrs * OBJPTR_SIZE;
+    f.end = p + getSequenceLength(p) * bytesPerElement;
+  }
+  else {
+    f.end = f.cur;  /* nothing to step through */
+  }
+  ME_push(st, f);
+
+  /* Not expected: a stack is reached only through its thread, which has
+   * identity, so the traversal stops there. Kept for what
+   * foreachObjptrInObject would have visited. */
+  if (STACK_TAG == tag) {
+    size_t first = st->size;
+    struct ME_pushArgs args = {.stack = st, .unpinDepth = childDepth};
+    struct GC_foreachObjptrClosure pushClosure =
+      {.fun = ME_pushField, .env = &args};
+    foreachObjptrInObject(s, p, &trueObjptrPredicateClosure, &pushClosure, FALSE);
+    for (size_t i = first, j = st->size - 1; i < j; i++, j--) {
+      struct ME_frame t = st->frames[i];
+      st->frames[i] = st->frames[j];
+      st->frames[j] = t;
+    }
+  }
+}
+
+/* The next field of an expanded frame that holds an objptr, or NULL when
+ * there are no more. */
+static objptr *ME_nextField(struct ME_frame *f) {
+  while (f->cur < f->end) {
+    objptr *opp = (objptr *) f->cur;
+    if (++(f->fieldIndex) < f->numObjptrs) {
+      f->cur += OBJPTR_SIZE;
+    }
+    else {
+      /* on to the next sequence element's objptrs */
+      f->fieldIndex = 0;
+      f->cur += OBJPTR_SIZE + f->bytesNonObjptrs;
+    }
+    if (isObjptr(*opp))
+      return opp;
+  }
+  return NULL;
+}
+
 #if ASSERT
 void traverseAndCheck(
   GC_state s,
-  __attribute__((unused)) objptr *opp,
-  objptr op,
+  objptr *opp,
+  __attribute__((unused)) objptr op,
   void *rawArgs)
 {
+  struct ME_stack st;
+  ME_init(&st);
+  ME_pushVisit(&st, opp, *(uint32_t*)rawArgs);
 
-  GC_header header = getHeader(objptrToPointer(op, NULL));
-  pointer p = objptrToPointer (op, NULL);
-  assert (pinType(header) == PIN_ANY);
-  assert (!isFwdHeader(header));
+  while (st.size > 0) {
+    struct ME_frame *top = &(st.frames[st.size - 1]);
+    if (top->expanded) {
+      objptr *fieldp = ME_nextField(top);
+      if (NULL == fieldp)
+        st.size--;
+      else
+        ME_pushVisit(&st, fieldp, top->childDepth);
+      continue;
+    }
 
-  uint32_t requiredUnpinDepth = *(uint32_t*)rawArgs;
-  uint32_t actualUnpinDepth = unpinDepthOfH(header);
-  uint32_t currentDepth = HM_getObjptrDepth(op);
+    struct ME_frame f = st.frames[--st.size];
+    objptr obj = *(f.opp);
+    GC_header header = getHeader(objptrToPointer(obj, NULL));
+    pointer p = objptrToPointer (obj, NULL);
+    assert (pinType(header) == PIN_ANY);
+    assert (!isFwdHeader(header));
 
-  assert (actualUnpinDepth <= requiredUnpinDepth);
+    uint32_t requiredUnpinDepth = f.unpinDepth;
+    uint32_t actualUnpinDepth = unpinDepthOfH(header);
+    uint32_t currentDepth = HM_getObjptrDepth(obj);
 
-  if (currentDepth <= requiredUnpinDepth) {
-    /* This object is an ancestor of the current thread, so the object is
-     * disentangled from the current thread's perspective. No futher checks
-     * are required. (If this object is mutable and has a down-pointer, it might
-     * be a suspect, but I don't need it to be a suspect for entanglement.)
-     */
-    return;
+    assert (actualUnpinDepth <= requiredUnpinDepth);
+
+    if (currentDepth <= requiredUnpinDepth) {
+      /* This object is an ancestor of the current thread, so the object is
+       * disentangled from the current thread's perspective. No further checks
+       * are required. (If this object is mutable and has a down-pointer, it might
+       * be a suspect, but I don't need it to be a suspect for entanglement.)
+       */
+      continue;
+    }
+    else if (isMutableH(s, header)) {
+      assert (ES_contains(NULL, obj));
+    }
+    else {
+      ME_pushExpanded(s, &st, f, p, actualUnpinDepth);
+    }
   }
-  else if (isMutableH(s, header)) {
-    assert (ES_contains(NULL, op));
-  }
-  else {
-    uint32_t requiredUnpinDepthForReachable = actualUnpinDepth;
-    struct GC_foreachObjptrClosure echeckClosure =
-        {.fun = traverseAndCheck, .env = &requiredUnpinDepthForReachable};
-    foreachObjptrInObject(s, p, &trueObjptrPredicateClosure, &echeckClosure, FALSE);
-  }
+
+  ME_free(&st);
 }
 #else
 inline void traverseAndCheck(
@@ -381,60 +551,16 @@ static inline objptr getRacyFwdPtr(pointer p) {
   return pointerToObjptr(p, NULL);
 }
 
-void make_entangled(
+/* make_entangled's last steps for each object it visits: fix the pointer to
+ * the object if it moved, make a mutable object a suspect, and (debug
+ * runtime) check. */
+static void ME_finish(
   GC_state s,
-  objptr *opp,
+  struct ME_frame *f,
   objptr ptr,
-  void *rawArgs)
+  objptr new_ptr,
+  bool mutable)
 {
-
-  struct ManageEntangledArgs* mea = (struct ManageEntangledArgs*) rawArgs;
-
-  HM_chunk chunk = HM_getChunkOf(objptrToPointer(ptr, NULL));
-  // if (!decheckIsOrdered(mea->root, allocator)) {
-  //   // while managing entanglement, we stay ordered wrt the root of the entanglement
-  //   return;
-  // }
-
-  pointer p_ptr = objptrToPointer(ptr, NULL);
-  GC_header header = getRacyHeader(p_ptr);
-  assert(!isFwdHeader(header));
-  bool mutable = isMutableH(s, header);
-  bool headerChange = false, pinChange = false;
-  // unpin depth according to the caller
-  uint32_t unpinDepth = mea->unpinDepth;
-
-  objptr new_ptr;
-  if (pinType(header) != PIN_ANY || unpinDepthOfH(header) > unpinDepth)
-  {
-    bool addToRemSet = mea->firstCall;
-    if (mutable) {
-      new_ptr = pinObjectInfo(s, ptr, unpinDepth, PIN_ANY, &headerChange, &pinChange);
-    }
-    else
-    {
-      mea->firstCall = false;
-      struct GC_foreachObjptrClosure emanageClosure =
-          {.fun = make_entangled, .env = rawArgs};
-      // the unpinDepth of reachable maybe smaller.
-      mea->unpinDepth = pinType(header) == PIN_NONE ? unpinDepth : min(unpinDepth, unpinDepthOfH(header));
-      foreachObjptrInObject(s, p_ptr, &trueObjptrPredicateClosure, &emanageClosure, FALSE);
-      new_ptr = pinObjectInfo(s, ptr, unpinDepth, PIN_ANY, &headerChange, &pinChange);
-      assert(pinType(getHeader(objptrToPointer(new_ptr, NULL))) == PIN_ANY);
-    }
-    if (pinChange && addToRemSet)
-    {
-      struct HM_remembered remElem_ = {.object = new_ptr, .from = BOGUS_OBJPTR};
-      HM_HH_rememberAtLevel(s, HM_getLevelHead(chunk), &(remElem_), true);
-      assert (HM_HH_getDepth(HM_getLevelHead(chunk)) != 1);
-    }
-  }
-  else {
-    new_ptr = getRacyFwdPtr(p_ptr);
-  }
-
-  mea->unpinDepth = unpinDepth;
-
   assert(!hasFwdPtr(objptrToPointer(new_ptr, NULL)));
   assert(isPinned(new_ptr));
 
@@ -442,19 +568,107 @@ void make_entangled(
     // Help LGC move along--because this reader might traverse this pointer
     // and it shouldn't see the forwarded one
     assert(hasFwdPtr(objptrToPointer(ptr, NULL)));
-    *opp = new_ptr;
+    *(f->opp) = new_ptr;
   }
 
   if (mutable && !ES_contains(NULL, new_ptr)) {
-    HM_HierarchicalHeap lcaHeap = HM_HH_getHeapAtDepth(s, getThreadCurrent(s), unpinDepth);
+    HM_HierarchicalHeap lcaHeap =
+      HM_HH_getHeapAtDepth(s, getThreadCurrent(s), f->unpinDepth);
     ES_add(s, HM_HH_getSuspects(lcaHeap), new_ptr);
     assert(ES_contains(NULL, new_ptr));
   }
 
-  uint32_t requiredUnpinDepth = mea->unpinDepth;
+  uint32_t requiredUnpinDepth = f->unpinDepth;
   traverseAndCheck(s, &new_ptr, new_ptr, &requiredUnpinDepth);
 
   assert (!mutable || ES_contains(NULL, new_ptr));
+}
+
+/* make_entangled pins everything reachable from an entangled object, up to
+ * mutable objects and objects that are already pinned deeply enough. An
+ * immutable object is pinned only after everything reachable from it is,
+ * since a reader that finds it pinned doesn't look further.
+ *
+ * The traversal keeps its pending objects in an explicit stack (ME_stack),
+ * not on the C stack. It visits the objects in the order the recursion did,
+ * with the same unpin depths, and holds one frame per object on the current
+ * path.
+ *
+ * Not inlined: its stack's inline frames would make manage_entangled's own
+ * frame about 3 KiB on every call, including the calls that return early.
+ */
+static __attribute__((noinline)) void make_entangled(
+  GC_state s,
+  objptr *rootp,
+  struct ManageEntangledArgs *mea)
+{
+  struct ME_stack st;
+  ME_init(&st);
+  ME_pushVisit(&st, rootp, mea->unpinDepth);
+  st.frames[0].addToRemSet = mea->firstCall;
+
+  while (st.size > 0) {
+    struct ME_frame *top = &(st.frames[st.size - 1]);
+    bool headerChange = false, pinChange = false;
+    objptr new_ptr;
+
+    if (top->expanded) {
+      objptr *fieldp = ME_nextField(top);
+      if (NULL != fieldp) {
+        ME_pushVisit(&st, fieldp, top->childDepth);
+        continue;
+      }
+
+      /* Everything reachable from this immutable object is pinned. */
+      struct ME_frame f = st.frames[--st.size];
+      objptr ptr = f.ptr;
+      HM_chunk chunk = HM_getChunkOf(objptrToPointer(ptr, NULL));
+      new_ptr = pinObjectInfo(s, ptr, f.unpinDepth, PIN_ANY, &headerChange, &pinChange);
+      assert(pinType(getHeader(objptrToPointer(new_ptr, NULL))) == PIN_ANY);
+      if (pinChange && f.addToRemSet) {
+        struct HM_remembered remElem_ = {.object = new_ptr, .from = BOGUS_OBJPTR};
+        HM_HH_rememberAtLevel(s, HM_getLevelHead(chunk), &(remElem_), true);
+        assert (HM_HH_getDepth(HM_getLevelHead(chunk)) != 1);
+      }
+      ME_finish(s, &f, ptr, new_ptr, false);
+      continue;
+    }
+
+    struct ME_frame f = st.frames[--st.size];
+    objptr ptr = *(f.opp);
+    pointer p_ptr = objptrToPointer(ptr, NULL);
+    HM_chunk chunk = HM_getChunkOf(p_ptr);
+    GC_header header = getRacyHeader(p_ptr);
+    assert(!isFwdHeader(header));
+    bool mutable = isMutableH(s, header);
+
+    if (pinType(header) != PIN_ANY || unpinDepthOfH(header) > f.unpinDepth) {
+      if (mutable) {
+        new_ptr = pinObjectInfo(s, ptr, f.unpinDepth, PIN_ANY, &headerChange, &pinChange);
+        if (pinChange && f.addToRemSet) {
+          struct HM_remembered remElem_ = {.object = new_ptr, .from = BOGUS_OBJPTR};
+          HM_HH_rememberAtLevel(s, HM_getLevelHead(chunk), &(remElem_), true);
+          assert (HM_HH_getDepth(HM_getLevelHead(chunk)) != 1);
+        }
+        ME_finish(s, &f, ptr, new_ptr, true);
+      }
+      else {
+        /* Pin the fields first, then (when this frame has no more fields)
+         * the object. The unpin depth of what's reachable may be smaller. */
+        f.ptr = ptr;
+        ME_pushExpanded(s, &st, f, p_ptr,
+                        pinType(header) == PIN_NONE
+                        ? f.unpinDepth
+                        : min(f.unpinDepth, unpinDepthOfH(header)));
+      }
+    }
+    else {
+      new_ptr = getRacyFwdPtr(p_ptr);
+      ME_finish(s, &f, ptr, new_ptr, mutable);
+    }
+  }
+
+  ME_free(&st);
 }
 
 
@@ -505,7 +719,7 @@ objptr manage_entangled(
       .firstCall = !(current_pt == PIN_DOWN && current_ud == 1)
     };
     Trace0(EVENT_MANAGE_ENTANGLED_ENTER);
-    make_entangled(s, &ptr, ptr, (void*) &mea);
+    make_entangled(s, &ptr, &mea);
     Trace0(EVENT_MANAGE_ENTANGLED_LEAVE);
 
     uint32_t requiredUnpinDepth = newUnpinDepth;
