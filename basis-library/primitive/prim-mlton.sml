@@ -159,6 +159,14 @@ structure GC =
       val getCumulativeStatisticsLocalBytesReclaimedOfProc = _import
       "GC_getCumulativeStatisticsLocalBytesReclaimedOfProc" runtime private: GCState.t * Word32.word -> C_UIntmax.t;
 
+      val currentHeapSize =
+        _import "GC_currentHeapSize" runtime private:
+        GCState.t -> C_UIntmax.t;
+
+      val currentHeapMapped =
+        _import "GC_currentHeapMapped" runtime private:
+        GCState.t -> C_UIntmax.t;
+
       val bytesInScopeForLocal =
         _import "GC_bytesInScopeForLocal" runtime private:
         GCState.t -> C_UIntmax.t;

@@ -105,6 +105,14 @@ size_t GC_getGlobalCumulativeStatisticsMaxHeapOccupancy (GC_state s) {
   return s->globalCumulativeStatistics->maxHeapOccupancy;
 }
 
+uintmax_t GC_currentHeapSize(GC_state s) {
+  return (uintmax_t)queryBlocksInUse(s) * (uintmax_t)s->controls->blockSize;
+}
+
+uintmax_t GC_currentHeapMapped(GC_state s) {
+  return (uintmax_t)queryBlocksMapped(s) * (uintmax_t)s->controls->blockSize;
+}
+
 uintmax_t GC_getCumulativeStatisticsBytesAllocatedOfProc(GC_state s, uint32_t proc) {
   return s->procStates[proc].cumulativeStatistics->bytesAllocated;
 }
