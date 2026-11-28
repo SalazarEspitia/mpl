@@ -3,6 +3,8 @@
 MaPLe is a functional language for provably efficient and safe multicore
 parallelism.
 
+Documentation, including how to get started: <https://mpllang.github.io/mpl/>.
+
 Features:
   * Support for the full Standard ML programming language, extended with
     task-parallel and data-parallel primitives.
